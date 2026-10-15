@@ -17,7 +17,7 @@ jobs:
           - os: windows-latest
             formats: wix,nsis
           - os: macos-latest
-            formats: dmg
+            formats: app
           - os: ubuntu-22.04
             formats: deb,appimage
     runs-on: ${{ matrix.os }}
@@ -33,7 +33,27 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
       - run: cargo test --release
-      - run: cargo packager --release --formats ${{ matrix.formats }}
+      - name: Package
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! cargo packager --release --formats ${{ matrix.formats }} 2>&1 | tee packager.log; then
+            # Job logs need a token to read; annotations are public.
+            tail -n 40 packager.log | sed 's/^/::error::/'
+            exit 1
+          fi
+      # cargo-packager's DMG step drives Finder via AppleScript, which is unreliable on
+      # headless runners; hdiutil builds the same image without a GUI session.
+      - name: Build DMG
+        if: runner.os == 'macOS'
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          app=$(find target/dist -maxdepth 1 -name '*.app' | head -n1)
+          staging=$(mktemp -d)
+          cp -R "$app" "$staging/"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname "MD Reader" -srcfolder "$staging" -ov -format UDZO \
+            "target/dist/mdreader_${version}_$(uname -m).dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.os }}

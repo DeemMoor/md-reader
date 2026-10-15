@@ -58,6 +58,7 @@ pub fn open_default_apps_settings() {
     let _ = open::that_detached("ms-settings:defaultapps");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn find_in_path(exe: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(exe))

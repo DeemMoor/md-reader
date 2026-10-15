@@ -39,7 +39,8 @@ jobs:
           set -o pipefail
           if ! cargo packager --release --formats ${{ matrix.formats }} 2>&1 | tee packager.log; then
             # Job logs need a token to read; annotations are public.
-            tail -n 40 packager.log | sed 's/^/::error::/'
+            # One annotation (GitHub keeps only the first 10), newlines encoded as %0A.
+            echo "::error::$(tail -n 25 packager.log | sed 's/\x1b\[[0-9;]*m//g' | awk '{printf "%s%%0A", $0}')"
             exit 1
           fi
       # cargo-packager's DMG step drives Finder via AppleScript, which is unreliable on

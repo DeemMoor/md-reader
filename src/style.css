@@ -53,9 +53,7 @@ body {
 }
 
 .markdown-body {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 40px 48px 80px;
+  padding: 32px 48px 80px;
 }
 
 .markdown-body > *:first-child { margin-top: 0 !important; }
@@ -155,6 +153,8 @@ pre, pre.hl-code {
   background: var(--code-bg) !important;
 }
 pre code { font-size: 100%; }
+/* Keep the language label clear of long lines that scroll under it. */
+.code-block:has(.code-lang) pre { padding-top: 28px; }
 
 kbd {
   display: inline-block;

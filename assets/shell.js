@@ -436,6 +436,89 @@
     post("exportHtml", { path: active.path, title: baseName(active.path), html: clone.innerHTML });
   }
 
+  // --- about -------------------------------------------------------------------
+
+  const aboutEl = $("#about");
+
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") node.className = v;
+      else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v);
+    }
+    node.append(...children.filter((c) => c !== null && c !== undefined));
+    return node;
+  }
+
+  function aboutText(a) {
+    return [
+      `MD Reader ${a.version}`,
+      `Сборка: ${a.buildDate}${a.commit ? " (" + a.commit + ")" : ""}`,
+      `Система: ${a.os}`,
+      `Движок: ${a.engine}`,
+      `Программа: ${a.exe}`,
+      `Настройки: ${a.settingsFile}`,
+      `Данные: ${a.dataDir}`,
+    ].join("\n");
+  }
+
+  function showAbout() {
+    const a = INIT.about;
+    const link = (text, onclick, title) => el("a", { href: "#", title: title || text, onclick: (e) => (e.preventDefault(), onclick()) }, text);
+    const pathLink = (p) => (p ? link(p, () => post("reveal", { path: p }), "Показать в папке") : "—");
+    const row = (label, value) => [el("dt", {}, label), el("dd", {}, value)];
+    const copyBtn = el("button", { class: "secondary", type: "button" }, "Скопировать сведения");
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(aboutText(a)).then(() => {
+        copyBtn.textContent = "Скопировано";
+        setTimeout(() => (copyBtn.textContent = "Скопировать сведения"), 1500);
+      });
+    });
+    const closeBtn = el("button", { class: "primary", type: "button", onclick: hideAbout }, "Закрыть");
+
+    aboutEl.replaceChildren(
+      el(
+        "div",
+        { class: "modal-box", role: "dialog", "aria-modal": "true", "aria-label": "О программе" },
+        el(
+          "div",
+          { class: "about-head" },
+          el("img", { src: "/_app/icons/icon-256.png", alt: "" }),
+          el(
+            "div",
+            {},
+            el("h2", {}, "MD Reader"),
+            el("div", { class: "about-version" }, `версия ${a.version} · ${a.os}`),
+          ),
+        ),
+        el("p", { class: "about-desc" }, "Читалка Markdown-файлов: вкладки, оглавление, темы, подсветка кода, диаграммы Mermaid и формулы."),
+        el(
+          "dl",
+          { class: "about-info" },
+          ...row("Автор", "Deem Moor"),
+          ...row("Сайт", link("github.com/DeemMoor/md-reader", () => post("openExternal", { url: "https://github.com/DeemMoor/md-reader" }))),
+          ...row("Сборка", `${a.buildDate}${a.commit ? " · " + a.commit : ""}`),
+          ...row("Движок", a.engine),
+          ...row("Программа", pathLink(a.exe)),
+          ...row("Настройки", pathLink(a.settingsFile)),
+          ...row("Данные", pathLink(a.dataDir)),
+        ),
+        el("p", { class: "about-credits" }, "© 2026 Deem Moor. Используются pulldown-cmark, syntect, wry, tao, muda, KaTeX и Mermaid."),
+        el("div", { class: "modal-actions" }, copyBtn, closeBtn),
+      ),
+    );
+    aboutEl.hidden = false;
+    closeBtn.focus();
+  }
+
+  function hideAbout() {
+    aboutEl.hidden = true;
+    focusActive();
+  }
+
+  aboutEl.addEventListener("mousedown", (e) => e.target === aboutEl && hideAbout());
+
   // Handled by the native side: dialogs, window state, settings that live in the menu.
   const NATIVE = new Set(["open", "sidebar", "exit", "fullscreen", "shortcuts"]);
 
@@ -464,6 +547,7 @@
         tab.pendingScroll = 0;
         return load(tab, tab.path, !tab.source);
       case "reload": return tab && frameWindow(tab)?.mdrDoc?.refresh();
+      case "about": return showAbout();
       case "back": return tab && goHistory(tab, tab.history, tab.future);
       case "forward": return tab && goHistory(tab, tab.future, tab.history);
     }
@@ -500,6 +584,14 @@
   }
 
   function handleKey(e) {
+    if (!aboutEl.hidden) {
+      if (e.code === "Escape") {
+        e.preventDefault();
+        hideAbout();
+        return true;
+      }
+      return false;
+    }
     const cmd = keyCommand(e);
     if (!cmd) return false;
     e.preventDefault();

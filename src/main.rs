@@ -28,7 +28,6 @@ use server::{BASE_URL, MARKDOWN_EXTS, PROTOCOL};
 use settings::{SessionTab, Settings, WindowState, same_path};
 
 const APP_NAME: &str = "MD Reader";
-const APP_ID: &str = "com.deemmoor.mdreader";
 const ICON_PNG: &[u8] = include_bytes!("../assets/icons/icon-256.png");
 
 #[derive(Debug)]
@@ -112,7 +111,7 @@ fn main() -> wry::Result<()> {
 
     // WebView2 keeps its profile next to the exe by default, which is not writable
     // when installed into Program Files.
-    let mut web_context = wry::WebContext::new(dirs::data_local_dir().map(|d| d.join(APP_ID).join("webview")));
+    let mut web_context = wry::WebContext::new(settings::webview_data_dir());
     let webview = match build_webview(&window, &mut web_context, &settings, &proxy) {
         Ok(webview) => webview,
         Err(err) => {
@@ -348,16 +347,6 @@ impl App {
             "fullscreen" => {
                 let full = self.window.fullscreen().is_some();
                 self.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
-            }
-            "about" => {
-                rfd::MessageDialog::new()
-                    .set_title("О программе")
-                    .set_description(format!(
-                        "{APP_NAME} {}\n\nЧиталка Markdown-файлов.\nhttps://github.com/DeemMoor/md-reader",
-                        env!("CARGO_PKG_VERSION")
-                    ))
-                    .set_parent(&self.window)
-                    .show();
             }
             "shortcuts" => {
                 rfd::MessageDialog::new()

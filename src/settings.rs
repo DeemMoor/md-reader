@@ -101,8 +101,13 @@ impl Settings {
     }
 }
 
-fn settings_path() -> Option<PathBuf> {
+pub fn settings_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("MD Reader").join("settings.json"))
+}
+
+/// WebView profile; kept out of the install dir, which may be read-only (Program Files).
+pub fn webview_data_dir() -> Option<PathBuf> {
+    Some(dirs::data_local_dir()?.join("com.deemmoor.mdreader").join("webview"))
 }
 
 pub fn same_path(a: &Path, b: &Path) -> bool {

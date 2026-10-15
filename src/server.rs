@@ -35,7 +35,8 @@ const PLATFORM: &str = if cfg!(windows) {
 
 #[derive(RustEmbed)]
 #[folder = "assets/"]
-#[exclude = "icons/*"]
+#[exclude = "icons/*.ico"]
+#[exclude = "icons/*@2x.png"]
 struct Assets;
 
 /// Per-process nonce: only our own scripts may run, never scripts embedded in a document.
@@ -103,10 +104,54 @@ struct Init<'a> {
     settings: &'a Settings,
     platform: &'static str,
     version: &'static str,
+    about: About,
+}
+
+/// Facts for the "About" window.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct About {
+    version: &'static str,
+    build_date: &'static str,
+    commit: &'static str,
+    os: String,
+    engine: String,
+    exe: String,
+    settings_file: String,
+    data_dir: String,
+}
+
+fn about() -> About {
+    let os = match PLATFORM {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        _ => "Linux",
+    };
+    let engine = if cfg!(windows) {
+        "WebView2"
+    } else if cfg!(target_os = "macos") {
+        "WebKit"
+    } else {
+        "WebKitGTK"
+    };
+    let path = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    About {
+        version: env!("CARGO_PKG_VERSION"),
+        build_date: env!("MDR_BUILD_DATE"),
+        commit: env!("MDR_COMMIT"),
+        os: format!("{os} {}", std::env::consts::ARCH),
+        engine: match wry::webview_version() {
+            Ok(v) => format!("{engine} {v}"),
+            Err(_) => engine.to_string(),
+        },
+        exe: path(std::env::current_exe().ok()),
+        settings_file: path(crate::settings::settings_path()),
+        data_dir: path(crate::settings::webview_data_dir().and_then(|d| d.parent().map(PathBuf::from))),
+    }
 }
 
 fn shell_page(settings: &Settings) -> String {
-    let init = Init { settings, platform: PLATFORM, version: env!("CARGO_PKG_VERSION") };
+    let init = Init { settings, platform: PLATFORM, version: env!("CARGO_PKG_VERSION"), about: about() };
     // Keep "</script>" in file names from closing the inline script.
     let init = serde_json::to_string(&init).unwrap_or_default().replace("</", "<\\/");
     format!(
@@ -143,6 +188,7 @@ fn shell_page(settings: &Settings) -> String {
     </div>
   </section>
 </div>
+<div id="about" class="modal" hidden></div>
 <script nonce="{nonce}">window.MDR_INIT = {init};</script>
 <script nonce="{nonce}" src="/_app/shell.js"></script>
 </body>

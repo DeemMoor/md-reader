@@ -129,7 +129,7 @@ fn main() -> wry::Result<()> {
                 let _ = webview.evaluate_script("window.mdrRefresh && window.mdrRefresh()");
             }
             Event::UserEvent(UserEvent::Title(title)) => {
-                window.set_title(&if title.is_empty() {
+                window.set_title(&if title.is_empty() || title == APP_NAME {
                     APP_NAME.to_string()
                 } else {
                     format!("{title} — {APP_NAME}")
@@ -220,7 +220,7 @@ fn page(title: &str, body: &str) -> String {
 
 fn welcome_page() -> String {
     page(
-        "",
+        APP_NAME,
         r#"<div class="welcome">
 <h1>MD Reader</h1>
 <p>Перетащи сюда <code>.md</code> файл</p>

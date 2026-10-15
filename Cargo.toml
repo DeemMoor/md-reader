@@ -1,6 +1,6 @@
 [package]
 name = "mdreader"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Читалка Markdown-файлов"
 authors = ["DeemMoor"]
@@ -31,6 +31,9 @@ languages = ["ru-RU"]
 
 [package.metadata.packager.nsis]
 template = "packaging/nsis/installer.nsi"
+installer-icon = "assets/icons/icon.ico"
+languages = ["Russian"]
+custom-language-file = { Russian = "packaging/nsis/Russian.nsh" }
 
 [package.metadata.packager.deb]
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libxdo3"]

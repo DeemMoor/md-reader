@@ -1,135 +1,178 @@
 #![windows_subsystem = "windows"]
 
+mod instance;
+mod menu;
+mod platform;
 mod render;
+mod server;
+mod settings;
 
-use std::borrow::Cow;
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::{fs, thread};
 
-use tao::dpi::LogicalSize;
+use muda::MenuEvent;
+use serde_json::{Value, json};
+use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tao::window::WindowBuilder;
-use wry::WebViewBuilder;
-use wry::http::{Request, Response, header::CONTENT_TYPE};
+use tao::window::{Fullscreen, Icon, Theme, Window, WindowBuilder};
+use wry::http::Request;
+use wry::{WebView, WebViewBuilder};
 
-use render::{SYNTAX_CSS, escape_html, markdown_to_html};
+use menu::AppMenu;
+use server::{BASE_URL, MARKDOWN_EXTS, PROTOCOL};
+use settings::{SessionTab, Settings, WindowState, same_path};
 
 const APP_NAME: &str = "MD Reader";
-const PROTOCOL: &str = "mdr";
-const STYLE: &str = include_str!("style.css");
-const SCRIPT: &str = include_str!("app.js");
-const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "mkdn", "mdx"];
-
-// WebView2 serves custom protocols through http://<name>.localhost.
-#[cfg(windows)]
-const BASE_URL: &str = "http://mdr.localhost/";
-#[cfg(not(windows))]
-const BASE_URL: &str = "mdr://localhost/";
-
-/// Per-process nonce: only our own script may run, never scripts embedded in a document.
-static NONCE: LazyLock<String> =
-    LazyLock::new(|| format!("{:016x}", RandomState::new().build_hasher().finish()));
-
-type Current = Arc<Mutex<Option<PathBuf>>>;
+const APP_ID: &str = "com.deemmoor.mdreader";
+const ICON_PNG: &[u8] = include_bytes!("../assets/icons/icon-256.png");
 
 #[derive(Debug)]
 enum UserEvent {
-    OpenDialog,
-    Open(PathBuf),
-    Refresh,
+    Menu(String),
+    Ipc(String),
+    Open(Vec<PathBuf>),
+    Refresh(PathBuf),
     Title(String),
 }
 
 fn main() -> wry::Result<()> {
+    let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let from_elevated = args.iter().any(|a| a == "--from-elevated");
+    args.retain(|a| a != "--from-elevated");
+
+    #[cfg(windows)]
+    if !from_elevated && platform::relaunch_unelevated(&args) {
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    let _ = from_elevated;
+
+    let paths: Vec<PathBuf> = args
+        .iter()
+        .map(|a| std::path::absolute(a).unwrap_or_else(|_| PathBuf::from(a)))
+        .collect();
+    if instance::forward_to_running(&paths) {
+        return Ok(());
+    }
+
+    let settings = Arc::new(Mutex::new(Settings::load()));
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
-    let window = WindowBuilder::new()
+    instance::listen({
+        let proxy = proxy.clone();
+        move |paths| {
+            let _ = proxy.send_event(UserEvent::Open(paths));
+        }
+    });
+    MenuEvent::set_event_handler(Some({
+        let proxy = proxy.clone();
+        move |event: MenuEvent| {
+            let _ = proxy.send_event(UserEvent::Menu(event.id.0));
+        }
+    }));
+
+    let initial = settings.lock().unwrap().clone();
+    let mut builder = WindowBuilder::new()
         .with_title(APP_NAME)
-        .with_inner_size(LogicalSize::new(1000.0, 820.0))
-        .with_min_inner_size(LogicalSize::new(400.0, 300.0))
-        .build(&event_loop)
-        .expect("failed to create window");
+        .with_inner_size(LogicalSize::new(1100.0, 820.0))
+        .with_min_inner_size(LogicalSize::new(480.0, 320.0))
+        .with_window_icon(window_icon())
+        .with_theme(window_theme(&initial.theme));
+    if let Some(ws) = initial.window {
+        let on_screen = event_loop.available_monitors().any(|m| {
+            let (p, s) = (m.position(), m.size());
+            ws.x + 50 >= p.x && ws.y >= p.y && ws.x + 50 < p.x + s.width as i32 && ws.y + 50 < p.y + s.height as i32
+        });
+        builder = builder.with_inner_size(PhysicalSize::new(ws.width, ws.height)).with_maximized(ws.maximized);
+        if on_screen {
+            builder = builder.with_position(PhysicalPosition::new(ws.x, ws.y));
+        }
+    }
+    let window = builder.build(&event_loop).expect("failed to create window");
 
-    let current: Current = Arc::new(Mutex::new(None));
-    let start_url = match std::env::args_os().nth(1) {
-        Some(arg) => doc_url(&std::path::absolute(PathBuf::from(arg)).unwrap_or_default()),
-        None => BASE_URL.to_string(),
+    let app_menu = AppMenu::new(&initial);
+    #[cfg(windows)]
+    unsafe {
+        use tao::platform::windows::WindowExtWindows;
+        let _ = app_menu.menu.init_for_hwnd_with_theme(window.hwnd(), menu_theme(&initial.theme));
+    }
+    #[cfg(target_os = "macos")]
+    app_menu.menu.init_for_nsapp();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use tao::platform::unix::WindowExtUnix;
+        let _ = app_menu.menu.init_for_gtk_window(window.gtk_window(), window.default_vbox());
+    }
+
+    // WebView2 keeps its profile next to the exe by default, which is not writable
+    // when installed into Program Files.
+    let mut web_context = wry::WebContext::new(dirs::data_local_dir().map(|d| d.join(APP_ID).join("webview")));
+    let webview = match build_webview(&window, &mut web_context, &settings, &proxy) {
+        Ok(webview) => webview,
+        Err(err) => {
+            rfd::MessageDialog::new()
+                .set_title(APP_NAME)
+                .set_description(format!(
+                    "Не удалось запустить встроенный браузер (WebView2).\n\n{err}\n\n\
+                     Установите Microsoft Edge WebView2 Runtime и попробуйте снова."
+                ))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+            return Err(err);
+        }
     };
+    let watched: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+    spawn_watcher(watched.clone(), proxy.clone());
 
-    let webview = WebViewBuilder::new()
-        .with_custom_protocol(PROTOCOL.into(), {
-            let current = current.clone();
-            move |_id, request| serve(&request, &current)
-        })
-        .with_navigation_handler(handle_navigation)
-        .with_ipc_handler({
-            let proxy = proxy.clone();
-            move |req: Request<String>| {
-                if req.body() == "open" {
-                    let _ = proxy.send_event(UserEvent::OpenDialog);
-                }
-            }
-        })
-        .with_drag_drop_handler({
-            let proxy = proxy.clone();
-            move |event| {
-                if let wry::DragDropEvent::Drop { paths, .. } = event
-                    && let Some(path) = paths.into_iter().find(|p| p.is_file())
-                {
-                    let _ = proxy.send_event(UserEvent::Open(path));
-                }
-                true
-            }
-        })
-        .with_document_title_changed_handler({
-            let proxy = proxy.clone();
-            move |title| {
-                let _ = proxy.send_event(UserEvent::Title(title));
-            }
-        })
-        .with_url(start_url)
-        .build(&window)?;
-
-    spawn_watcher(current.clone(), proxy);
-    let _ = webview.focus();
+    let mut app = App {
+        window,
+        webview,
+        _web_context: web_context,
+        menu: app_menu,
+        settings,
+        watched,
+        pending: paths,
+        ready: false,
+    };
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                app.save_window_state();
                 *control_flow = ControlFlow::Exit;
             }
             // Keep keyboard scrolling working without clicking into the page first.
             Event::WindowEvent { event: WindowEvent::Focused(true), .. } => {
-                let _ = webview.focus();
+                let _ = app.webview.focus();
             }
-            Event::UserEvent(UserEvent::OpenDialog) => {
-                let mut dialog = rfd::FileDialog::new()
-                    .set_title("Открыть Markdown")
-                    .add_filter("Markdown", MARKDOWN_EXTS)
-                    .add_filter("Все файлы", &["*"])
-                    .set_parent(&window);
-                if let Some(dir) = current.lock().unwrap().as_ref().and_then(|p| p.parent()) {
-                    dialog = dialog.set_directory(dir);
-                }
-                if let Some(path) = dialog.pick_file() {
-                    let _ = webview.load_url(&doc_url(&path));
+            Event::UserEvent(UserEvent::Menu(id)) => {
+                if app.handle_command(&id) {
+                    app.save_window_state();
+                    *control_flow = ControlFlow::Exit;
                 }
             }
-            Event::UserEvent(UserEvent::Open(path)) => {
-                let _ = webview.load_url(&doc_url(&path));
+            Event::UserEvent(UserEvent::Ipc(body)) => {
+                if app.handle_ipc(&body) {
+                    app.save_window_state();
+                    *control_flow = ControlFlow::Exit;
+                }
             }
-            Event::UserEvent(UserEvent::Refresh) => {
-                let _ = webview.evaluate_script("window.mdrRefresh && window.mdrRefresh()");
+            Event::UserEvent(UserEvent::Open(paths)) => {
+                app.open(paths);
+                app.bring_to_front();
+            }
+            Event::UserEvent(UserEvent::Refresh(path)) => {
+                app.js(&format!("mdrShell.fileChanged({})", json!(path)));
             }
             Event::UserEvent(UserEvent::Title(title)) => {
-                window.set_title(&if title.is_empty() || title == APP_NAME {
+                app.window.set_title(&if title.is_empty() || title == APP_NAME {
                     APP_NAME.to_string()
                 } else {
                     format!("{title} — {APP_NAME}")
@@ -140,186 +183,348 @@ fn main() -> wry::Result<()> {
     });
 }
 
-/// Local URLs stay in the viewer (markdown) or go to the default app (other files);
-/// everything else opens in the system browser / mail client.
-fn handle_navigation(url: String) -> bool {
-    if url.starts_with(BASE_URL) || url.starts_with("mdr:") {
-        if let Some(path) = path_from_url(&url)
-            && !is_markdown(&path)
-            && path.is_file()
-        {
-            let _ = open::that_detached(&path);
+fn build_webview(
+    window: &Window,
+    web_context: &mut wry::WebContext,
+    settings: &Arc<Mutex<Settings>>,
+    proxy: &EventLoopProxy<UserEvent>,
+) -> wry::Result<WebView> {
+    let builder = WebViewBuilder::new_with_web_context(web_context)
+        .with_custom_protocol(PROTOCOL.into(), {
+            let settings = settings.clone();
+            move |_id, request| server::handle(&request, &settings)
+        })
+        // Only the app shell lives in the top frame; anything else goes to the browser.
+        .with_navigation_handler(|url| {
+            if url.starts_with(BASE_URL) || url.starts_with("mdr:") {
+                return true;
+            }
+            open_external(&url);
+            false
+        })
+        .with_new_window_req_handler(|url, _| {
+            open_external(&url);
+            wry::NewWindowResponse::Deny
+        })
+        .with_ipc_handler({
+            let proxy = proxy.clone();
+            move |req: Request<String>| {
+                let _ = proxy.send_event(UserEvent::Ipc(req.into_body()));
+            }
+        })
+        .with_drag_drop_handler({
+            let proxy = proxy.clone();
+            move |event| {
+                if let wry::DragDropEvent::Drop { paths, .. } = event {
+                    let files: Vec<_> = paths.into_iter().filter(|p| p.is_file()).collect();
+                    if !files.is_empty() {
+                        let _ = proxy.send_event(UserEvent::Open(files));
+                    }
+                }
+                true
+            }
+        })
+        .with_document_title_changed_handler({
+            let proxy = proxy.clone();
+            move |title| {
+                let _ = proxy.send_event(UserEvent::Title(title));
+            }
+        })
+        .with_url(BASE_URL);
+
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let webview = builder.build(window)?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        builder.build_gtk(window.default_vbox().expect("gtk vbox"))?
+    };
+    let _ = webview.focus();
+    Ok(webview)
+}
+
+struct App {
+    window: Window,
+    webview: WebView,
+    _web_context: wry::WebContext,
+    menu: AppMenu,
+    settings: Arc<Mutex<Settings>>,
+    watched: Arc<Mutex<Vec<PathBuf>>>,
+    /// Files to open once the shell page reports it is ready.
+    pending: Vec<PathBuf>,
+    ready: bool,
+}
+
+impl App {
+    fn js(&self, script: &str) {
+        let _ = self.webview.evaluate_script(script);
+    }
+
+    fn open(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.ready {
+            self.js(&format!("mdrShell.open({})", json!(paths)));
+        } else {
+            self.pending.extend(paths);
+        }
+    }
+
+    fn bring_to_front(&self) {
+        if self.window.is_minimized() {
+            self.window.set_minimized(false);
+        }
+        self.window.set_focus();
+    }
+
+    fn open_dialog(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Открыть Markdown")
+            .add_filter("Markdown", MARKDOWN_EXTS)
+            .add_filter("Все файлы", &["*"])
+            .set_parent(&self.window);
+        let dir = {
+            let s = self.settings.lock().unwrap();
+            s.session.get(s.active).or(s.session.first()).and_then(|t| t.path.parent().map(PathBuf::from))
+        };
+        if let Some(dir) = dir {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(paths) = dialog.pick_files() {
+            self.open(paths);
+        }
+    }
+
+    /// Applies a settings change everywhere: disk, menu, window chrome and the page.
+    fn settings_changed(&mut self, push_to_page: bool) {
+        let s = self.settings.lock().unwrap().clone();
+        s.save();
+        self.menu.sync(&s);
+        self.window.set_theme(window_theme(&s.theme));
+        #[cfg(windows)]
+        unsafe {
+            use tao::platform::windows::WindowExtWindows;
+            let _ = self.menu.menu.set_theme_for_hwnd(self.window.hwnd(), menu_theme(&s.theme));
+        }
+        if push_to_page {
+            self.js(&format!("mdrShell.applySettings({})", json!(s)));
+        }
+    }
+
+    /// Returns true when the app should exit.
+    fn handle_command(&mut self, id: &str) -> bool {
+        if let Some(theme) = id.strip_prefix("theme:") {
+            self.settings.lock().unwrap().theme = theme.to_string();
+            self.settings_changed(true);
             return false;
         }
-        return true;
-    }
-    if url.starts_with("about:") {
-        return true;
-    }
-    let _ = open::that_detached(&url);
-    false
-}
-
-fn serve(request: &Request<Vec<u8>>, current: &Current) -> Response<Cow<'static, [u8]>> {
-    let raw = request.uri().path().trim_start_matches('/');
-    if raw.is_empty() {
-        *current.lock().unwrap() = None;
-        return html_response(welcome_page());
-    }
-
-    let path = PathBuf::from(percent_decode(raw));
-    let body_only = request.uri().query() == Some("body");
-
-    if is_markdown(&path) {
-        let title = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let content = match fs::read(&path) {
-            Ok(bytes) => markdown_to_html(&String::from_utf8_lossy(&bytes)),
-            Err(err) => format!(
-                r#"<p class="error">Не удалось открыть <code>{}</code>: {}</p>"#,
-                escape_html(&path.display().to_string()),
-                escape_html(&err.to_string())
-            ),
-        };
-        if body_only {
-            return html_response(content);
+        if let Some(width) = id.strip_prefix("width:") {
+            self.settings.lock().unwrap().width = width.to_string();
+            self.settings_changed(true);
+            return false;
         }
-        *current.lock().unwrap() = Some(path);
-        return html_response(page(&title, &format!(r#"<article id="content" class="markdown-body">{content}</article>"#)));
+        if let Some(index) = id.strip_prefix("recent:").and_then(|i| i.parse().ok()) {
+            if let Some(path) = self.menu.recent_path(index) {
+                self.open(vec![path]);
+            }
+            return false;
+        }
+        match id {
+            "open" => self.open_dialog(),
+            "exit" => return true,
+            "sidebar" => {
+                let mut s = self.settings.lock().unwrap();
+                s.sidebar = !s.sidebar;
+                drop(s);
+                self.settings_changed(true);
+            }
+            "recent_clear" => {
+                self.settings.lock().unwrap().recent.clear();
+                self.menu.set_recent(&[]);
+                self.settings_changed(true);
+            }
+            "fullscreen" => {
+                let full = self.window.fullscreen().is_some();
+                self.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
+            }
+            "about" => {
+                rfd::MessageDialog::new()
+                    .set_title("О программе")
+                    .set_description(format!(
+                        "{APP_NAME} {}\n\nЧиталка Markdown-файлов.\nhttps://github.com/DeemMoor/md-reader",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .set_parent(&self.window)
+                    .show();
+            }
+            "shortcuts" => {
+                rfd::MessageDialog::new()
+                    .set_title("Горячие клавиши")
+                    .set_description(SHORTCUTS)
+                    .set_parent(&self.window)
+                    .show();
+            }
+            "default_app" => platform::open_default_apps_settings(),
+            // Everything else acts on the current tab, which only the page knows about.
+            other => self.js(&format!("mdrShell.command({})", json!(other))),
+        }
+        false
     }
 
-    match fs::read(&path) {
-        Ok(bytes) => Response::builder()
-            .header(CONTENT_TYPE, mime_for(&path))
-            .body(Cow::Owned(bytes))
-            .unwrap(),
-        Err(_) => Response::builder().status(404).body(Cow::Borrowed(&[][..])).unwrap(),
+    /// Returns true when the app should exit.
+    fn handle_ipc(&mut self, body: &str) -> bool {
+        let Ok(msg) = serde_json::from_str::<Value>(body) else { return false };
+        let str_field = |key: &str| msg.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+        match msg.get("cmd").and_then(Value::as_str).unwrap_or_default() {
+            "ready" => {
+                self.ready = true;
+                let pending = std::mem::take(&mut self.pending);
+                self.open(pending);
+            }
+            "menu" => return self.handle_command(&str_field("id")),
+            "openExternal" => open_external(&str_field("url")),
+            "openPath" => {
+                let _ = open::that_detached(str_field("path"));
+            }
+            "editor" => platform::open_in_editor(&PathBuf::from(str_field("path"))),
+            "reveal" => platform::reveal(&PathBuf::from(str_field("path"))),
+            "exportHtml" => self.export_html(&str_field("path"), &str_field("title"), &str_field("html")),
+            "opened" => {
+                let path = PathBuf::from(str_field("path"));
+                let mut s = self.settings.lock().unwrap();
+                s.add_recent(&path);
+                let recent = s.recent.clone();
+                drop(s);
+                self.menu.set_recent(&recent);
+                self.settings_changed(false);
+            }
+            "state" => {
+                let tabs: Vec<SessionTab> =
+                    serde_json::from_value(msg.get("tabs").cloned().unwrap_or_default()).unwrap_or_default();
+                *self.watched.lock().unwrap() = tabs.iter().map(|t| t.path.clone()).collect();
+                let mut s = self.settings.lock().unwrap();
+                s.session = tabs;
+                s.active = msg.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
+                s.save();
+            }
+            "settings" => {
+                if let Some(patch) = msg.get("patch") {
+                    self.settings.lock().unwrap().merge(patch);
+                    self.settings_changed(false);
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn export_html(&self, path: &str, title: &str, article: &str) {
+        let source = PathBuf::from(path);
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Экспорт в HTML")
+            .add_filter("HTML", &["html"])
+            .set_parent(&self.window);
+        if let Some(dir) = source.parent() {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(stem) = source.file_stem() {
+            dialog = dialog.set_file_name(format!("{}.html", stem.to_string_lossy()));
+        }
+        if let Some(target) = dialog.save_file() {
+            if let Err(err) = fs::write(&target, server::export_page(title, article)) {
+                rfd::MessageDialog::new()
+                    .set_title("Экспорт в HTML")
+                    .set_description(format!("Не удалось сохранить файл: {err}"))
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_parent(&self.window)
+                    .show();
+            }
+        }
+    }
+
+    fn save_window_state(&self) {
+        let mut s = self.settings.lock().unwrap();
+        let maximized = self.window.is_maximized();
+        if maximized || self.window.is_minimized() || self.window.fullscreen().is_some() {
+            // Keep the last normal geometry so un-maximizing restores it.
+            if let Some(ws) = s.window.as_mut() {
+                ws.maximized = maximized;
+            }
+        } else if let Ok(pos) = self.window.outer_position() {
+            let size = self.window.inner_size();
+            s.window = Some(WindowState { x: pos.x, y: pos.y, width: size.width, height: size.height, maximized });
+        }
+        s.save();
     }
 }
 
-fn page(title: &str, body: &str) -> String {
-    let nonce = &*NONCE;
-    format!(
-        r#"<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; img-src * data: blob:; media-src * data: blob:; style-src 'self' 'unsafe-inline'; script-src 'nonce-{nonce}'">
-<title>{title}</title>
-<style>{STYLE}
-{css}</style>
-</head>
-<body>
-{body}
-<script nonce="{nonce}">{SCRIPT}</script>
-</body>
-</html>"#,
-        title = escape_html(title),
-        css = &*SYNTAX_CSS,
-    )
+const SHORTCUTS: &str = "\
+Ctrl+O — открыть файл
+Ctrl+W — закрыть вкладку
+Ctrl+Shift+T — вернуть закрытую вкладку
+Ctrl+Tab / Ctrl+Shift+Tab — следующая / предыдущая вкладка
+Ctrl+1…9 — перейти к вкладке
+Ctrl+B — боковая панель
+Ctrl+F — поиск по тексту
+Ctrl+E — открыть в редакторе
+Ctrl+U — исходный текст
+Ctrl+P — печать / сохранить в PDF
+Ctrl + / Ctrl − / Ctrl+0 — масштаб (или Ctrl + колесо)
+Alt+← / Alt+→ — назад / вперёд по ссылкам
+F5 — обновить
+F11 — во весь экран";
+
+fn open_external(url: &str) {
+    let allowed = ["http://", "https://", "mailto:"];
+    if allowed.iter().any(|p| url.starts_with(p)) {
+        let _ = open::that_detached(url);
+    }
 }
 
-fn welcome_page() -> String {
-    page(
-        APP_NAME,
-        r#"<div class="welcome">
-<h1>MD Reader</h1>
-<p>Перетащи сюда <code>.md</code> файл</p>
-<p>или нажми <kbd>Ctrl</kbd> + <kbd>O</kbd></p>
-</div>"#,
-    )
+fn window_icon() -> Option<Icon> {
+    let img = image::load_from_memory(ICON_PNG).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    Icon::from_rgba(img.into_raw(), w, h).ok()
 }
 
-fn html_response(html: String) -> Response<Cow<'static, [u8]>> {
-    Response::builder()
-        .header(CONTENT_TYPE, "text/html; charset=utf-8")
-        .header("Cache-Control", "no-store")
-        .body(Cow::Owned(html.into_bytes()))
-        .unwrap()
+fn window_theme(theme: &str) -> Option<Theme> {
+    match theme {
+        "dark" => Some(Theme::Dark),
+        "light" | "sepia" => Some(Theme::Light),
+        _ => None,
+    }
 }
 
-/// Polls the open document and asks the page to re-render when it changes on disk.
-fn spawn_watcher(current: Current, proxy: EventLoopProxy<UserEvent>) {
+#[cfg(windows)]
+fn menu_theme(theme: &str) -> muda::MenuTheme {
+    match theme {
+        "dark" => muda::MenuTheme::Dark,
+        "light" | "sepia" => muda::MenuTheme::Light,
+        _ => muda::MenuTheme::Auto,
+    }
+}
+
+/// Polls open documents and asks the page to re-render the ones that change on disk.
+fn spawn_watcher(watched: Arc<Mutex<Vec<PathBuf>>>, proxy: EventLoopProxy<UserEvent>) {
     thread::spawn(move || {
-        let mut last: Option<(PathBuf, Option<SystemTime>)> = None;
+        let mut known: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
         loop {
             thread::sleep(Duration::from_millis(400));
-            let Some(path) = current.lock().unwrap().clone() else {
-                last = None;
-                continue;
-            };
-            let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
-            if let Some((prev_path, prev_mtime)) = &last
-                && *prev_path == path
-                && *prev_mtime != mtime
-                && proxy.send_event(UserEvent::Refresh).is_err()
-            {
-                return;
+            let paths = watched.lock().unwrap().clone();
+            known.retain(|p, _| paths.iter().any(|q| same_path(p, q)));
+            for path in paths {
+                let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+                match known.insert(path.clone(), mtime) {
+                    Some(prev) if prev != mtime => {
+                        if proxy.send_event(UserEvent::Refresh(path)).is_err() {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
             }
-            last = Some((path, mtime));
         }
     });
-}
-
-fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| MARKDOWN_EXTS.iter().any(|m| m.eq_ignore_ascii_case(e)))
-}
-
-fn doc_url(path: &Path) -> String {
-    let path = path.to_string_lossy().replace('\\', "/");
-    let mut url = String::from(BASE_URL);
-    for b in path.bytes() {
-        if b.is_ascii_alphanumeric() || b"/:-_.~".contains(&b) {
-            url.push(b as char);
-        } else {
-            url.push_str(&format!("%{b:02X}"));
-        }
-    }
-    url
-}
-
-fn path_from_url(url: &str) -> Option<PathBuf> {
-    let rest = url.strip_prefix(BASE_URL)?;
-    let rest = rest.split(['?', '#']).next().unwrap_or("");
-    (!rest.is_empty()).then(|| PathBuf::from(percent_decode(rest)))
-}
-
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && let Some(hex) = s.get(i + 1..i + 3)
-            && let Ok(b) = u8::from_str_radix(hex, 16)
-        {
-            out.push(b);
-            i += 3;
-            continue;
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn mime_for(path: &Path) -> &'static str {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "svg" => "image/svg+xml",
-        "webp" => "image/webp",
-        "avif" => "image/avif",
-        "bmp" => "image/bmp",
-        "ico" => "image/x-icon",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "css" => "text/css",
-        "txt" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
 }

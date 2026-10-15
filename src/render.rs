@@ -11,18 +11,22 @@ const CLASS_STYLE: ClassStyle = ClassStyle::SpacedPrefixed { prefix: "hl-" };
 
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 
-/// Highlighting CSS: light theme by default, dark one under prefers-color-scheme.
+/// Highlighting CSS: light colors by default, dark ones for the dark theme
+/// (explicit, or "auto" while the system is dark). Relies on CSS nesting.
 pub static SYNTAX_CSS: LazyLock<String> = LazyLock::new(|| {
     let themes = ThemeSet::load_defaults();
     let light = css_for_theme_with_class_style(&themes.themes["InspiredGitHub"], CLASS_STYLE)
         .unwrap_or_default();
     let dark = css_for_theme_with_class_style(&themes.themes["base16-ocean.dark"], CLASS_STYLE)
         .unwrap_or_default();
-    format!("{light}\n@media (prefers-color-scheme: dark) {{\n{dark}\n}}")
+    format!(
+        "{light}\n:root[data-theme=\"dark\"] {{\n{dark}\n}}\n\
+         @media (prefers-color-scheme: dark) {{\n:root[data-theme=\"auto\"] {{\n{dark}\n}}\n}}"
+    )
 });
 
 pub fn markdown_to_html(src: &str) -> String {
-    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
+    let src = strip_bom(src);
     let opts = Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -30,7 +34,8 @@ pub fn markdown_to_html(src: &str) -> String {
         | Options::ENABLE_HEADING_ATTRIBUTES
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
         | Options::ENABLE_GFM
-        | Options::ENABLE_DEFINITION_LIST;
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_MATH;
 
     let mut events: Vec<Event> = Vec::new();
     let mut code: Option<(String, String)> = None;
@@ -59,7 +64,12 @@ pub fn markdown_to_html(src: &str) -> String {
             }
             Event::End(TagEnd::CodeBlock) => {
                 if let Some((lang, text)) = code.take() {
-                    events.push(Event::Html(highlight(&lang, &text).into()));
+                    let html = if lang.eq_ignore_ascii_case("mermaid") {
+                        format!(r#"<pre class="mermaid">{}</pre>"#, escape_html(&text))
+                    } else {
+                        highlight(&lang, &text)
+                    };
+                    events.push(Event::Html(html.into()));
                 }
             }
             other => events.push(other),
@@ -71,6 +81,18 @@ pub fn markdown_to_html(src: &str) -> String {
     let mut html = String::with_capacity(src.len() * 2);
     pulldown_cmark::html::push_html(&mut html, events.into_iter());
     html
+}
+
+/// The raw markdown, highlighted, for the "view source" mode.
+pub fn source_to_html(src: &str) -> String {
+    format!(
+        r#"<div class="source-view">{}</div>"#,
+        highlight("markdown", strip_bom(src))
+    )
+}
+
+fn strip_bom(src: &str) -> &str {
+    src.strip_prefix('\u{feff}').unwrap_or(src)
 }
 
 fn highlight(lang: &str, code: &str) -> String {
@@ -147,4 +169,37 @@ pub fn escape_html(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headings_get_unique_ids() {
+        let html = markdown_to_html("# Привет мир\n\n## Intro\n\n## Intro\n");
+        assert!(html.contains(r#"<h1 id="привет-мир">"#));
+        assert!(html.contains(r#"<h2 id="intro">"#));
+        assert!(html.contains(r#"<h2 id="intro-1">"#));
+    }
+
+    #[test]
+    fn mermaid_blocks_are_left_for_the_client() {
+        let html = markdown_to_html("```mermaid\ngraph TD; A-->B\n```\n");
+        assert!(html.contains(r#"<pre class="mermaid">graph TD; A--&gt;B"#));
+    }
+
+    #[test]
+    fn math_is_marked_up() {
+        let html = markdown_to_html("Inline $a^2$ and\n\n$$\\sum x$$\n");
+        assert!(html.contains("math-inline"));
+        assert!(html.contains("math-display"));
+    }
+
+    #[test]
+    fn front_matter_is_hidden() {
+        let html = markdown_to_html("---\ntitle: x\n---\n\nBody\n");
+        assert!(!html.contains("title: x"));
+        assert!(html.contains("Body"));
+    }
 }

@@ -1,12 +1,54 @@
-[package]
+﻿[package]
 name = "mdreader"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+description = "Читалка Markdown-файлов"
+authors = ["DeemMoor"]
+repository = "https://github.com/DeemMoor/md-reader"
+
+[package.metadata.packager]
+product-name = "MD Reader"
+identifier = "com.deemmoor.mdreader"
+publisher = "DeemMoor"
+homepage = "https://github.com/DeemMoor/md-reader"
+category = "Productivity"
+out-dir = "target/dist"
+before-packaging-command = "cargo build --release"
+binaries = [{ path = "mdreader", main = true }]
+icons = [
+  "assets/icons/32x32.png",
+  "assets/icons/128x128.png",
+  "assets/icons/128x128@2x.png",
+  "assets/icons/icon.png",
+  "assets/icons/icon.ico",
+]
+file-associations = [
+  { extensions = ["md", "markdown", "mdown", "mkd", "mkdn"], mime-type = "text/markdown", name = "Markdown", description = "Markdown document", role = "viewer" },
+]
+
+[package.metadata.packager.wix]
+languages = ["ru-RU"]
+
+[package.metadata.packager.nsis]
+template = "packaging/nsis/installer.nsi"
+
+[package.metadata.packager.deb]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libxdo3"]
+
+[package.metadata.packager.macos]
+minimum-system-version = "10.15"
 
 [dependencies]
+dirs = "7.0.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+interprocess = "2.4.5"
+muda = "0.21.2"
 open = "5.4.4"
 pulldown-cmark = "0.13.4"
 rfd = "0.17.2"
+rust-embed = { version = "8.13.0", features = ["debug-embed", "include-exclude"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 tao = "0.37.1"
 wry = "0.57.0"
@@ -16,3 +58,9 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+winresource = "0.1.34"

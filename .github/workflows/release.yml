@@ -22,7 +22,7 @@ jobs:
             formats: deb,appimage
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux dependencies
@@ -55,7 +55,7 @@ jobs:
           ln -s /Applications "$staging/Applications"
           hdiutil create -volname "MD Reader" -srcfolder "$staging" -ov -format UDZO \
             "target/dist/mdreader_${version}_$(uname -m).dmg"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.os }}
           if-no-files-found: error
@@ -71,20 +71,22 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release description (and the in-app "what is new") is this version's CHANGELOG.md section.
       - name: Release notes
         run: |
           version="${GITHUB_REF_NAME#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "$crate" = "$version" ] || { echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $crate"; exit 1; }
           awk -v v="$version" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > notes.md
           grep -q "[^[:space:]]" notes.md || { echo "::error::CHANGELOG.md has no section for $version"; exit 1; }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body_path: notes.md

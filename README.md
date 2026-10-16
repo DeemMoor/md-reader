@@ -61,6 +61,7 @@ graph LR
 ```sh
 cargo build --release          # target/release/mdreader(.exe)
 cargo test
+node --test tests/diff.test.js   # движок живого диффа
 ```
 
 Установщики собираются [cargo-packager](https://github.com/crabnebula-dev/cargo-packager):

@@ -203,7 +203,10 @@ fn shell_page(settings: &Settings) -> String {
     <div id="welcome">
       <h1>MD Reader</h1>
       <p>Перетащи сюда <code>.md</code> файл или нажми <kbd>Ctrl</kbd> + <kbd>O</kbd></p>
-      <button id="welcome-open" class="primary">Открыть файл…</button>
+      <div class="welcome-actions">
+        <button id="welcome-open" class="primary">Открыть файл…</button>
+        <button id="welcome-paste" class="secondary" title="Ctrl+Shift+V">Из буфера обмена</button>
+      </div>
       <div id="welcome-recent"></div>
     </div>
   </section>

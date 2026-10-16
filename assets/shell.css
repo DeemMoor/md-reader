@@ -416,6 +416,8 @@ iframe.doc.active { display: block; }
 }
 .primary:hover { filter: brightness(1.08); }
 
+.welcome-actions { display: flex; gap: 8px; }
+
 #welcome-recent {
   display: flex;
   flex-direction: column;

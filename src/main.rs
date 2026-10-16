@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod clipboard;
 mod instance;
 mod log;
 mod menu;
@@ -11,7 +12,7 @@ mod update;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, thread};
@@ -67,6 +68,7 @@ fn main() -> wry::Result<()> {
 
     log::init();
     let settings = Arc::new(Mutex::new(Settings::load()));
+    clipboard::cleanup(&settings.lock().unwrap().session.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -405,6 +407,10 @@ impl App {
         }
         match id {
             "open" => self.open_dialog(),
+            "new_from_clipboard" => match clipboard::read().and_then(|md| clipboard::create(&md)) {
+                Ok(path) => self.open(vec![path]),
+                Err(err) => self.js(&format!("mdrShell.notify('Создать из буфера', {})", json!(capitalize(&err)))),
+            },
             "exit" => return true,
             "sidebar" => {
                 let mut s = self.settings.lock().unwrap();
@@ -474,9 +480,13 @@ impl App {
             }
             "editor" => platform::open_in_editor(&PathBuf::from(str_field("path"))),
             "reveal" => platform::reveal(&PathBuf::from(str_field("path"))),
+            "saveAs" => self.save_as(&PathBuf::from(str_field("path"))),
             "exportHtml" => self.export_html(&str_field("path"), &str_field("title"), &str_field("html")),
             "opened" => {
                 let path = PathBuf::from(str_field("path"));
+                if clipboard::is_scratch(&path) {
+                    return false;
+                }
                 let mut s = self.settings.lock().unwrap();
                 s.add_recent(&path);
                 let recent = s.recent.clone();
@@ -502,6 +512,50 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    /// Saves the document's source under a new name and moves its tab there. A
+    /// clipboard scratch file is moved rather than copied.
+    fn save_as(&self, source: &Path) {
+        let fail = |err: String| {
+            log::error(format!("save as {}: {err}", source.display()));
+            rfd::MessageDialog::new()
+                .set_title("Сохранить как")
+                .set_description(format!("Не удалось сохранить файл: {err}"))
+                .set_level(rfd::MessageLevel::Error)
+                .set_parent(&self.window)
+                .show();
+        };
+        let bytes = match fs::read(source) {
+            Ok(bytes) => bytes,
+            Err(err) => return fail(err.to_string()),
+        };
+        let scratch = clipboard::is_scratch(source);
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Сохранить как")
+            .add_filter("Markdown", &["md"])
+            .add_filter("Все файлы", &["*"])
+            .set_parent(&self.window);
+        let name = if scratch {
+            clipboard::suggested_name(&String::from_utf8_lossy(&bytes)).unwrap_or_else(|| "Документ.md".into())
+        } else {
+            source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+        };
+        let dir = if scratch { dirs::document_dir() } else { source.parent().map(PathBuf::from) };
+        if let Some(dir) = dir {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(target) = dialog.set_file_name(name).save_file() else { return };
+        if same_path(&target, source) {
+            return;
+        }
+        if let Err(err) = fs::write(&target, &bytes) {
+            return fail(err.to_string());
+        }
+        if scratch {
+            let _ = fs::remove_file(source);
+        }
+        self.js(&format!("mdrShell.replacePath({}, {})", json!(source), json!(target)));
     }
 
     fn export_html(&self, path: &str, title: &str, article: &str) {
@@ -547,6 +601,8 @@ impl App {
 
 const SHORTCUTS: &str = "\
 Ctrl+O — открыть файл
+Ctrl+Shift+V — создать документ из буфера обмена
+Ctrl+Shift+S — сохранить как
 Ctrl+W — закрыть вкладку
 Ctrl+Shift+T — вернуть закрытую вкладку
 Ctrl+Tab / Ctrl+Shift+Tab — следующая / предыдущая вкладка
@@ -562,6 +618,11 @@ F5 — обновить
 F7 / Shift+F7 — следующее / предыдущее изменение
 Ctrl+Shift+R — актуализировать (снять подсветку изменений)
 F11 — во весь экран";
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect::<String>() + ".").unwrap_or_default()
+}
 
 fn open_external(url: &str) {
     let allowed = ["http://", "https://", "mailto:"];

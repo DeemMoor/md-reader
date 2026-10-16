@@ -61,8 +61,10 @@ impl AppMenu {
             true,
             &[
                 &item("open", "Открыть…", "CmdOrCtrl+O"),
+                &item("new_from_clipboard", "Создать из буфера", "CmdOrCtrl+Shift+V"),
                 &recent,
                 &PredefinedMenuItem::separator(),
+                &item("save_as", "Сохранить как…", "CmdOrCtrl+Shift+S"),
                 &item("close_tab", "Закрыть вкладку", "CmdOrCtrl+W"),
                 &item("reopen_tab", "Вернуть закрытую вкладку", "CmdOrCtrl+Shift+T"),
                 &PredefinedMenuItem::separator(),

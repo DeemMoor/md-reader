@@ -643,7 +643,7 @@
   updateBtn.addEventListener("click", () => update && showUpdate(update));
 
   // Handled by the native side: dialogs, window state, settings that live in the menu.
-  const NATIVE = new Set(["open", "sidebar", "exit", "fullscreen", "shortcuts", "follow"]);
+  const NATIVE = new Set(["open", "new_from_clipboard", "sidebar", "exit", "fullscreen", "shortcuts", "follow"]);
 
   function command(name) {
     if (NATIVE.has(name)) return post("menu", { id: name });
@@ -655,6 +655,7 @@
       case "prev_tab": return cycle(-1);
       case "editor": return tab && post("editor", { path: tab.path });
       case "reveal": return tab && post("reveal", { path: tab.path });
+      case "save_as": return tab && post("saveAs", { path: tab.path });
       case "export_html": return exportHtml();
       case "print": return tab && frameWindow(tab)?.print();
       case "show_toc":
@@ -691,7 +692,7 @@
     const mod = isMac ? e.metaKey : e.ctrlKey;
     if (mod && !e.altKey) {
       if (e.code === "Tab") return e.shiftKey ? "prev_tab" : "next_tab";
-      if (e.shiftKey) return { KeyT: "reopen_tab", KeyR: "actualize" }[e.code] || null;
+      if (e.shiftKey) return { KeyT: "reopen_tab", KeyR: "actualize", KeyV: "new_from_clipboard", KeyS: "save_as" }[e.code] || null;
       const digit = /^Digit([1-9])$/.exec(e.code);
       if (digit) {
         const n = +digit[1];
@@ -766,6 +767,7 @@
   }
 
   $("#welcome-open").addEventListener("click", () => command("open"));
+  $("#welcome-paste").addEventListener("click", () => command("new_from_clipboard"));
   $("#open-btn").addEventListener("click", () => command("open"));
   $("#sidebar-toggle").addEventListener("click", () => command("sidebar"));
 
@@ -779,6 +781,19 @@
     zoomBy,
     post,
     catchErrors,
+    notify: (title, text) => message(title, text),
+    // "Save as" moved a document: point its tabs at the new file, keeping the diff base.
+    replacePath(from, to) {
+      for (const t of tabs) {
+        if (norm(t.path) !== norm(from)) continue;
+        const base = t.bases.get(norm(from));
+        if (base) t.bases.set(norm(to), base);
+        t.path = to;
+        load(t, to, t.source);
+      }
+      post("opened", { path: to });
+      reportState();
+    },
     fileChanged(path) {
       for (const t of tabs) if (norm(t.path) === norm(path)) frameWindow(t)?.mdrDoc?.refresh();
     },

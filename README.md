@@ -89,5 +89,13 @@ git push origin v0.2.0
 - `src/server.rs` — протокол `mdr://`: оболочка, документы, ресурсы, список файлов
 - `src/render.rs` — Markdown → HTML (pulldown-cmark), подсветка (syntect)
 - `src/settings.rs`, `src/instance.rs`, `src/platform.rs` — настройки, единственный экземпляр, мелочи ОС
+- `src/update.rs` — проверка обновлений и загрузка установщика с проверкой SHA-256
+- `assets/diff.js` — живой дифф: сравнение версий документа (Myers по блокам, строкам и словам)
 - `assets/` — интерфейс (`shell.*`), стили и скрипт документа (`doc.*`), вшитые KaTeX и Mermaid (лицензии MIT, в `assets/vendor`)
 - `packaging/nsis/installer.nsi` — шаблон NSIS с исправлением снятия ассоциаций при удалении
+
+История изменений — в [CHANGELOG.md](CHANGELOG.md).
+
+## Лицензия
+
+[MIT](LICENSE)

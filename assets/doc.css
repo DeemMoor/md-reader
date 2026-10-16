@@ -16,6 +16,8 @@
   --important: #8250df;
   --warning: #9a6700;
   --caution: #d1242f;
+  --diff-ins: #2da44e1c;
+  --diff-del-bg: #cf222e17;
   color-scheme: light;
 }
 
@@ -36,6 +38,8 @@
   --important: #ab7df8;
   --warning: #d29922;
   --caution: #f85149;
+  --diff-ins: #2ea04329;
+  --diff-del-bg: #f8514922;
   color-scheme: dark;
 }
 
@@ -57,6 +61,8 @@
     --important: #ab7df8;
     --warning: #d29922;
     --caution: #f85149;
+    --diff-ins: #2ea04329;
+    --diff-del-bg: #f8514922;
     color-scheme: dark;
   }
 }
@@ -78,6 +84,8 @@
   --important: #7a4a9a;
   --warning: #9a6a00;
   --caution: #b3362a;
+  --diff-ins: #4b7a2a21;
+  --diff-del-bg: #b3362a1c;
   color-scheme: light;
 }
 
@@ -296,4 +304,24 @@ details summary { cursor: pointer; }
   pre { white-space: pre-wrap; }
   h1, h2, h3, h4 { break-after: avoid; }
   pre, table, img, .mermaid { break-inside: avoid; }
+}
+
+/* --- live diff --- */
+
+.mdr-ins { background-image: linear-gradient(var(--diff-ins), var(--diff-ins)); }
+.mdr-del { background-image: linear-gradient(var(--diff-del-bg), var(--diff-del-bg)); }
+.mdr-del, .mdr-del *, [data-mdr="del"], [data-mdr="del"] * { color: var(--muted) !important; }
+span.mdr-ins, span.mdr-del { border-radius: 3px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+:is(.mdr-del, [data-mdr="del"]) :is(img, svg) { opacity: 0.5; }
+
+/* What just arrived, and where a jump landed. */
+.mdr-fresh, .mdr-flash { animation: mdr-flash 1.6s ease-out; }
+@keyframes mdr-flash {
+  from { outline: 2px solid var(--link); outline-offset: 2px; }
+  to { outline: 2px solid transparent; outline-offset: 2px; }
+}
+
+@media print {
+  .mdr-del, [data-mdr="del"] { display: none; }
+  .mdr-ins { background-image: none; }
 }

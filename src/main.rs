@@ -6,12 +6,13 @@ mod platform;
 mod render;
 mod server;
 mod settings;
+mod update;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, thread};
 
 use muda::MenuEvent;
@@ -37,6 +38,10 @@ enum UserEvent {
     Open(Vec<PathBuf>),
     Refresh(PathBuf),
     Title(String),
+    /// Script for the page, from a background thread.
+    Js(String),
+    /// A downloaded update installer: start it and quit.
+    RunInstaller(PathBuf),
 }
 
 fn main() -> wry::Result<()> {
@@ -138,6 +143,7 @@ fn main() -> wry::Result<()> {
         watched,
         pending: paths,
         ready: false,
+        proxy: proxy.clone(),
     };
 
     event_loop.run(move |event, _, control_flow| {
@@ -169,6 +175,20 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::Refresh(path)) => {
                 app.js(&format!("mdrShell.fileChanged({})", json!(path)));
+            }
+            Event::UserEvent(UserEvent::Js(script)) => app.js(&script),
+            Event::UserEvent(UserEvent::RunInstaller(path)) => {
+                // Through the shell, so the installer can ask for elevation if it needs it.
+                match open::that_detached(&path) {
+                    Ok(()) => {
+                        app.save_window_state();
+                        *control_flow = ControlFlow::Exit;
+                    }
+                    Err(err) => app.js(&format!(
+                        "mdrShell.updateFailed({})",
+                        json!(format!("не удалось запустить установщик: {err}"))
+                    )),
+                }
             }
             Event::UserEvent(UserEvent::Title(title)) => {
                 app.window.set_title(&if title.is_empty() || title == APP_NAME {
@@ -253,11 +273,52 @@ struct App {
     /// Files to open once the shell page reports it is ready.
     pending: Vec<PathBuf>,
     ready: bool,
+    proxy: EventLoopProxy<UserEvent>,
 }
 
 impl App {
     fn js(&self, script: &str) {
         let _ = self.webview.evaluate_script(script);
+    }
+
+    /// Asks GitHub for the latest release; `manual` says the user asked, so even
+    /// "nothing new" and errors get shown.
+    fn check_updates(&self, manual: bool) {
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let result = match update::check() {
+                Ok(release) => json!({ "ok": true, "manual": manual, "release": release }),
+                Err(error) => json!({ "ok": false, "manual": manual, "error": error }),
+            };
+            let _ = proxy.send_event(UserEvent::Js(format!("mdrShell.updateResult({result})")));
+        });
+    }
+
+    /// The silent check at startup, at most once a day.
+    fn auto_check_updates(&self) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let mut s = self.settings.lock().unwrap();
+        if !s.update_check || now.saturating_sub(s.last_update_check) < 24 * 60 * 60 {
+            return;
+        }
+        s.last_update_check = now;
+        s.save();
+        drop(s);
+        self.check_updates(false);
+    }
+
+    fn install_update(&self, url: String, checksums: String) {
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let progress = |pct: u32| {
+                let _ = proxy.send_event(UserEvent::Js(format!("mdrShell.updateProgress({pct})")));
+            };
+            let event = match update::download(&url, &checksums, progress) {
+                Ok(path) => UserEvent::RunInstaller(path),
+                Err(error) => UserEvent::Js(format!("mdrShell.updateFailed({})", json!(error))),
+            };
+            let _ = proxy.send_event(event);
+        });
     }
 
     fn open(&mut self, paths: Vec<PathBuf>) {
@@ -339,6 +400,19 @@ impl App {
                 drop(s);
                 self.settings_changed(true);
             }
+            "follow" => {
+                let mut s = self.settings.lock().unwrap();
+                s.follow = !s.follow;
+                drop(s);
+                self.settings_changed(true);
+            }
+            "check_updates" => self.check_updates(true),
+            "update_auto" => {
+                let mut s = self.settings.lock().unwrap();
+                s.update_check = !s.update_check;
+                drop(s);
+                self.settings_changed(true);
+            }
             "recent_clear" => {
                 self.settings.lock().unwrap().recent.clear();
                 self.menu.set_recent(&[]);
@@ -371,7 +445,9 @@ impl App {
                 self.ready = true;
                 let pending = std::mem::take(&mut self.pending);
                 self.open(pending);
+                self.auto_check_updates();
             }
+            "installUpdate" => self.install_update(str_field("url"), str_field("checksums")),
             "menu" => return self.handle_command(&str_field("id")),
             "openExternal" => open_external(&str_field("url")),
             "openPath" => {
@@ -463,6 +539,8 @@ Ctrl+P — печать / сохранить в PDF
 Ctrl + / Ctrl − / Ctrl+0 — масштаб (или Ctrl + колесо)
 Alt+← / Alt+→ — назад / вперёд по ссылкам
 F5 — обновить
+F7 / Shift+F7 — следующее / предыдущее изменение
+Ctrl+Shift+R — актуализировать (снять подсветку изменений)
 F11 — во весь экран";
 
 fn open_external(url: &str) {

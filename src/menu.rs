@@ -17,6 +17,8 @@ pub struct AppMenu {
     recent: Submenu,
     recent_paths: Vec<PathBuf>,
     sidebar: CheckMenuItem,
+    follow: CheckMenuItem,
+    update_auto: CheckMenuItem,
     themes: Vec<(&'static str, CheckMenuItem)>,
     widths: Vec<(&'static str, CheckMenuItem)>,
 }
@@ -90,6 +92,8 @@ impl AppMenu {
 
         let sidebar =
             CheckMenuItem::with_id("sidebar", "Боковая панель", true, settings.sidebar, accel("CmdOrCtrl+B"));
+        let follow =
+            CheckMenuItem::with_id("follow", "Следить за правками", true, settings.follow, None);
         let themes: Vec<_> = THEMES
             .iter()
             .map(|(id, name)| {
@@ -129,6 +133,11 @@ impl AppMenu {
                 &item("source", "Исходный текст", "CmdOrCtrl+U"),
                 &item("reload", "Обновить", "F5"),
                 &item("fullscreen", "Во весь экран", "F11"),
+                &PredefinedMenuItem::separator(),
+                &item("next_change", "Следующее изменение", "F7"),
+                &item("prev_change", "Предыдущее изменение", "Shift+F7"),
+                &follow,
+                &item("actualize", "Актуализировать", "CmdOrCtrl+Shift+R"),
             ],
         )
         .unwrap();
@@ -136,6 +145,17 @@ impl AppMenu {
 
         let help = Submenu::new("&Справка", true);
         let _ = help.append(&item("shortcuts", "Горячие клавиши", "F1"));
+        let _ = help.append(&PredefinedMenuItem::separator());
+        let update_auto = CheckMenuItem::with_id(
+            "update_auto",
+            "Проверять обновления при запуске",
+            true,
+            settings.update_check,
+            None,
+        );
+        let _ = help.append(&item("check_updates", "Проверить обновления…", ""));
+        let _ = help.append(&update_auto);
+        let _ = help.append(&PredefinedMenuItem::separator());
         #[cfg(windows)]
         let _ = help.append(&item("default_app", "Сделать программой для .md…", ""));
         #[cfg(not(target_os = "macos"))]
@@ -145,7 +165,7 @@ impl AppMenu {
         }
         let _ = menu.append(&help);
 
-        let mut this = Self { menu, recent, recent_paths: Vec::new(), sidebar, themes, widths };
+        let mut this = Self { menu, recent, recent_paths: Vec::new(), sidebar, follow, update_auto, themes, widths };
         this.set_recent(&settings.recent);
         this
     }
@@ -172,6 +192,8 @@ impl AppMenu {
 
     pub fn sync(&self, settings: &Settings) {
         self.sidebar.set_checked(settings.sidebar);
+        self.follow.set_checked(settings.follow);
+        self.update_auto.set_checked(settings.update_check);
         for (id, it) in &self.themes {
             it.set_checked(settings.theme == *id);
         }

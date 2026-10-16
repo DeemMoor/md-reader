@@ -17,6 +17,12 @@ pub struct Settings {
     pub sidebar_panel: String,
     pub sidebar_width: f64,
     pub zoom: f64,
+    /// Scroll to the latest edit of a document that is changing.
+    pub follow: bool,
+    /// Look for a new release at startup (at most daily).
+    pub update_check: bool,
+    /// Unix time of the last automatic check.
+    pub last_update_check: u64,
     pub recent: Vec<PathBuf>,
     pub session: Vec<SessionTab>,
     pub active: usize,
@@ -49,6 +55,9 @@ impl Default for Settings {
             sidebar_panel: "toc".into(),
             sidebar_width: 260.0,
             zoom: 1.0,
+            follow: true,
+            update_check: true,
+            last_update_check: 0,
             recent: Vec::new(),
             session: Vec::new(),
             active: 0,

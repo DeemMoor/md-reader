@@ -63,8 +63,20 @@ pub fn handle(request: &Request<Vec<u8>>, settings: &Arc<Mutex<Settings>>) -> Re
         let dir = PathBuf::from(query.get("dir").unwrap_or_default());
         return json(&list_dir(&dir));
     }
+    if raw == "_api/render" {
+        // The live diff renders the version a tab started from, which is no longer on disk.
+        let text = String::from_utf8_lossy(request.body());
+        let source = query.get("view").as_deref() == Some("source");
+        return html(if source { source_to_html(&text) } else { markdown_to_html(&text) });
+    }
 
     let path = PathBuf::from(percent_decode(raw));
+    if is_markdown(&path) && query.has("raw") {
+        return match fs::read(&path) {
+            Ok(bytes) => respond("text/plain; charset=utf-8", bytes),
+            Err(_) => not_found(),
+        };
+    }
     if is_markdown(&path) {
         let source = query.get("view").as_deref() == Some("source");
         let content = match fs::read(&path) {
@@ -167,6 +179,7 @@ fn shell_page(settings: &Settings) -> String {
 <header id="tabbar">
   <button id="sidebar-toggle" class="icon-btn" title="Боковая панель (Ctrl+B)"><svg viewBox="0 0 16 16"><path d="M2 3.5h12M2 8h12M2 12.5h12"/></svg></button>
   <div id="tabs" role="tablist"></div>
+  <button id="update-btn" class="text-btn update-btn" hidden>Обновление</button>
   <button id="open-btn" class="icon-btn" title="Открыть файл (Ctrl+O)"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button>
 </header>
 <div id="main">
@@ -213,6 +226,7 @@ fn doc_page(path: &Path, content: &str, settings: &Settings) -> String {
 </head>
 <body>
 <article id="content" class="markdown-body">{content}</article>
+<script nonce="{nonce}" src="/_app/diff.js"></script>
 <script nonce="{nonce}" src="/_app/doc.js"></script>
 </body>
 </html>"#,

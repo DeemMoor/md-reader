@@ -20,6 +20,8 @@
     folder: '<svg viewBox="0 0 16 16"><path d="M1.5 4.5v8h13v-7H7.5L6 4H1.5z"/></svg>',
     file: '<svg viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z M9.5 1.5v3h3"/></svg>',
     up: '<svg viewBox="0 0 16 16"><path d="M8 13V3M4 7l4-4 4 4"/></svg>',
+    prev: '<svg viewBox="0 0 16 16"><path d="M4 10l4-4 4 4"/></svg>',
+    next: '<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>',
   };
 
   const post = (cmd, data = {}) => window.ipc.postMessage(JSON.stringify({ cmd, ...data }));
@@ -83,8 +85,13 @@
     const el = document.createElement("div");
     el.className = "tab";
     el.setAttribute("role", "tab");
-    el.innerHTML = '<span class="tab-title"></span><button class="tab-close" title="Закрыть (Ctrl+W)">×</button>';
-    const tab = { path, frame, el, source: false, history: [], future: [], pendingScroll: scroll, pendingHash: hash };
+    el.innerHTML =
+      '<span class="tab-title"></span><button class="tab-close" title="Закрыть (Ctrl+W)">×</button>';
+    const tab = {
+      path, frame, el, source: false, history: [], future: [], pendingScroll: scroll, pendingHash: hash,
+      // Live diff: the version each document was first shown in, and its changes since.
+      bases: new Map(), stats: { add: 0, del: 0 },
+    };
 
     el.addEventListener("mousedown", (e) => e.button === 1 && e.preventDefault());
     el.addEventListener("auxclick", (e) => e.button === 1 && closeTab(tab));
@@ -146,6 +153,7 @@
     if (tab) tab.el.scrollIntoView({ block: "nearest", inline: "nearest" });
     buildToc();
     syncFiles();
+    updateDiffTools();
     focusActive();
     reportState();
   }
@@ -219,6 +227,43 @@
   tabsEl.addEventListener("wheel", (e) => {
     if (!e.ctrlKey) tabsEl.scrollLeft += e.deltaY;
   });
+
+  // --- live diff ------------------------------------------------------------------
+
+  const diffTools = document.createElement("div");
+  diffTools.id = "difftools";
+  diffTools.hidden = true;
+  diffTools.innerHTML =
+    '<span class="diff-count"><span class="add"></span><span class="del"></span></span>' +
+    `<button class="icon-btn small" data-cmd="prev_change" title="Предыдущее изменение (Shift+F7)">${ICONS.prev}</button>` +
+    `<button class="icon-btn small" data-cmd="next_change" title="Следующее изменение (F7)">${ICONS.next}</button>` +
+    '<button class="text-btn follow" data-cmd="follow" title="Прокручивать к месту, где документ только что изменился">Следить</button>' +
+    '<button class="text-btn" data-cmd="actualize" title="Принять текущую версию как исходную и снять подсветку (Ctrl+Shift+R)">Актуализировать</button>';
+  diffTools.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-cmd]");
+    if (b) command(b.dataset.cmd);
+    if (b && b.dataset.cmd !== "follow") focusActive();
+  });
+  docsEl.appendChild(diffTools);
+
+  const hasChanges = (tab) => tab.stats.add > 0 || tab.stats.del > 0;
+
+  function fillCount(box, stats) {
+    box.querySelector(".add").textContent = stats.add ? "+" + stats.add : "";
+    box.querySelector(".del").textContent = stats.del ? "−" + stats.del : "";
+  }
+
+  function updateDiffTools() {
+    const on = !!active && hasChanges(active);
+    diffTools.hidden = !on;
+    if (on) fillCount(diffTools, active.stats);
+    diffTools.querySelector(".follow").classList.toggle("on", settings.follow !== false);
+  }
+
+  function setDiffStats(tab, stats) {
+    tab.stats = stats;
+    if (tab === active) updateDiffTools();
+  }
 
   // --- outline ------------------------------------------------------------------
 
@@ -411,6 +456,7 @@
     applySidebar();
     for (const t of tabs) frameWindow(t)?.mdrDoc?.applySettings(s);
     renderWelcomeRecent();
+    updateDiffTools();
   }
 
   const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
@@ -513,14 +559,82 @@
   }
 
   function hideAbout() {
+    updateBox = null;
     aboutEl.hidden = true;
     focusActive();
   }
 
   aboutEl.addEventListener("mousedown", (e) => e.target === aboutEl && hideAbout());
 
+  // --- updates -------------------------------------------------------------------
+
+  const updateBtn = $("#update-btn");
+  let update = null; // the newer release, once known
+  let updateBox = null; // its dialog while open
+
+  function modal(label, ...children) {
+    const box = el("div", { class: "modal-box", role: "dialog", "aria-modal": "true", "aria-label": label }, ...children);
+    aboutEl.replaceChildren(box);
+    aboutEl.hidden = false;
+    return box;
+  }
+
+  function message(title, text) {
+    updateBox = null;
+    const ok = el("button", { class: "primary", type: "button", onclick: hideAbout }, "Закрыть");
+    modal(title, el("h2", { class: "modal-title" }, title), el("p", {}, text), el("div", { class: "modal-actions" }, ok));
+    ok.focus();
+  }
+
+  async function renderNotes(target, markdown) {
+    if (!markdown.trim()) {
+      target.textContent = "Описание изменений не опубликовано.";
+      return;
+    }
+    try {
+      const res = await fetch("/_api/render", { method: "POST", body: markdown, cache: "no-store" });
+      target.innerHTML = await res.text();
+      target.querySelectorAll("a[href]").forEach((a) =>
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          post("openExternal", { url: a.href });
+        }),
+      );
+    } catch {
+      target.textContent = markdown;
+    }
+  }
+
+  function showUpdate(r) {
+    const notes = el("div", { class: "release-notes" });
+    const status = el("p", { class: "update-status" });
+    const later = el("button", { class: "secondary", type: "button", onclick: hideAbout }, "Позже");
+    const page = el("button", { class: "secondary", type: "button", onclick: () => post("openExternal", { url: r.page }) }, "Страница релиза");
+    const install = el("button", { class: "primary", type: "button" }, r.installer ? "Обновить" : "Скачать");
+    install.addEventListener("click", () => {
+      if (!r.installer) return post("openExternal", { url: r.page });
+      install.disabled = later.disabled = true;
+      install.textContent = "Загрузка…";
+      status.textContent = "";
+      post("installUpdate", { url: r.installer, checksums: r.checksums || "" });
+    });
+    updateBox = { install, later, status };
+    modal(
+      "Обновление",
+      el("h2", { class: "modal-title" }, "Доступна версия " + r.version),
+      el("p", { class: "about-version" }, "Сейчас установлена " + INIT.version + ". Что нового:"),
+      notes,
+      status,
+      el("div", { class: "modal-actions" }, page, later, install),
+    );
+    install.focus();
+    renderNotes(notes, r.notes);
+  }
+
+  updateBtn.addEventListener("click", () => update && showUpdate(update));
+
   // Handled by the native side: dialogs, window state, settings that live in the menu.
-  const NATIVE = new Set(["open", "sidebar", "exit", "fullscreen", "shortcuts"]);
+  const NATIVE = new Set(["open", "sidebar", "exit", "fullscreen", "shortcuts", "follow"]);
 
   function command(name) {
     if (NATIVE.has(name)) return post("menu", { id: name });
@@ -547,7 +661,11 @@
         tab.pendingScroll = 0;
         return load(tab, tab.path, !tab.source);
       case "reload": return tab && frameWindow(tab)?.mdrDoc?.refresh();
+      case "next_change": return tab && frameWindow(tab)?.mdrDoc?.goChange(1);
+      case "prev_change": return tab && frameWindow(tab)?.mdrDoc?.goChange(-1);
+      case "actualize": return tab && frameWindow(tab)?.mdrDoc?.actualize();
       case "about": return showAbout();
+      case "show_update": return update && showUpdate(update);
       case "back": return tab && goHistory(tab, tab.history, tab.future);
       case "forward": return tab && goHistory(tab, tab.future, tab.history);
     }
@@ -564,7 +682,7 @@
     const mod = isMac ? e.metaKey : e.ctrlKey;
     if (mod && !e.altKey) {
       if (e.code === "Tab") return e.shiftKey ? "prev_tab" : "next_tab";
-      if (e.shiftKey) return e.code === "KeyT" ? "reopen_tab" : null;
+      if (e.shiftKey) return { KeyT: "reopen_tab", KeyR: "actualize" }[e.code] || null;
       const digit = /^Digit([1-9])$/.exec(e.code);
       if (digit) {
         const n = +digit[1];
@@ -578,14 +696,17 @@
       if (e.code === "ArrowRight") return "forward";
     }
     if (!mod && !e.altKey && !e.shiftKey) {
-      return { F5: "reload", F11: "fullscreen", F1: "shortcuts" }[e.code] || null;
+      return { F5: "reload", F7: "next_change", F11: "fullscreen", F1: "shortcuts" }[e.code] || null;
+    }
+    if (e.shiftKey && !mod && !e.altKey) {
+      return e.code === "F7" ? "prev_change" : null;
     }
     return null;
   }
 
   function handleKey(e) {
     if (!aboutEl.hidden) {
-      if (e.code === "Escape") {
+      if (e.code === "Escape" && !updateBox?.install.disabled) {
         e.preventDefault();
         hideAbout();
         return true;
@@ -650,6 +771,41 @@
     post,
     fileChanged(path) {
       for (const t of tabs) if (norm(t.path) === norm(path)) frameWindow(t)?.mdrDoc?.refresh();
+    },
+    diffBase(w) {
+      const tab = tabs.find((t) => frameWindow(t) === w);
+      const path = tab && pathFromUrl(w.location.href);
+      if (!path) return null;
+      const key = norm(path);
+      if (!tab.bases.has(key)) tab.bases.set(key, { raw: null, html: {} });
+      return tab.bases.get(key);
+    },
+    diffStats(w, stats) {
+      const tab = tabs.find((t) => frameWindow(t) === w);
+      if (tab) setDiffStats(tab, stats);
+    },
+    updateResult({ ok, manual, release, error }) {
+      if (!ok) {
+        if (manual) message("Обновления", `Не удалось проверить обновления: ${error}.`);
+        return;
+      }
+      if (!release.newer) {
+        if (manual) message("Обновления", `У вас последняя версия — ${INIT.version}.`);
+        return;
+      }
+      update = release;
+      updateBtn.hidden = false;
+      updateBtn.title = `Доступна версия ${release.version}`;
+      if (manual) showUpdate(release);
+    },
+    updateProgress(pct) {
+      if (updateBox) updateBox.install.textContent = `Загрузка… ${pct}%`;
+    },
+    updateFailed(error) {
+      if (!updateBox) return message("Обновления", `Не получилось обновиться: ${error}.`);
+      updateBox.install.disabled = updateBox.later.disabled = false;
+      updateBox.install.textContent = "Повторить";
+      updateBox.status.textContent = `Не получилось: ${error}.`;
     },
     docUpdated(w) {
       if (active && frameWindow(active) === w) buildToc();

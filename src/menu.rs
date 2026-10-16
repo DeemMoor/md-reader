@@ -156,6 +156,9 @@ impl AppMenu {
         let _ = help.append(&item("check_updates", "Проверить обновления…", ""));
         let _ = help.append(&update_auto);
         let _ = help.append(&PredefinedMenuItem::separator());
+        let _ = help.append(&item("report_issue", "Сообщить о проблеме…", ""));
+        let _ = help.append(&item("open_log", "Открыть журнал ошибок", ""));
+        let _ = help.append(&PredefinedMenuItem::separator());
         #[cfg(windows)]
         let _ = help.append(&item("default_app", "Сделать программой для .md…", ""));
         #[cfg(not(target_os = "macos"))]

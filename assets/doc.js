@@ -15,6 +15,8 @@
     }
   })();
 
+  if (shell) shell.catchErrors(window, () => "document " + decodeURIComponent(location.pathname));
+
   const loading = {};
   function loadScript(src) {
     return (loading[src] ||= new Promise((resolve, reject) => {

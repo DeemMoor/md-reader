@@ -26,6 +26,19 @@
 
   const post = (cmd, data = {}) => window.ipc.postMessage(JSON.stringify({ cmd, ...data }));
 
+  // Script errors from the shell and the documents go to the native error log.
+  let logged = 0;
+  function logError(where, error) {
+    if (++logged > 20) return;
+    const text = error && error.stack ? error.stack : String(error && error.message ? error.message : error);
+    post("log", { message: `${where}: ${text}`.slice(0, 2000) });
+  }
+  function catchErrors(w, where) {
+    w.addEventListener("error", (e) => logError(where(), e.error || `${e.message} (${e.filename}:${e.lineno})`));
+    w.addEventListener("unhandledrejection", (e) => logError(where(), e.reason));
+  }
+  catchErrors(window, () => "shell");
+
   // --- paths ------------------------------------------------------------------
 
   const slashes = (p) => String(p).replace(/\\/g, "/");
@@ -765,6 +778,7 @@
     handleKey,
     zoomBy,
     post,
+    catchErrors,
     fileChanged(path) {
       for (const t of tabs) if (norm(t.path) === norm(path)) frameWindow(t)?.mdrDoc?.refresh();
     },

@@ -162,6 +162,13 @@ fn about() -> About {
     }
 }
 
+/// Plain-text system facts for bug reports, without paths.
+pub fn about_text() -> String {
+    let a = about();
+    let commit = if a.commit.is_empty() { String::new() } else { format!(" ({})", a.commit) };
+    format!("MD Reader {}\nСборка: {}{commit}\nСистема: {}\nДвижок: {}", a.version, a.build_date, a.os, a.engine)
+}
+
 fn shell_page(settings: &Settings) -> String {
     let init = Init { settings, platform: PLATFORM, version: env!("CARGO_PKG_VERSION"), about: about() };
     // Keep "</script>" in file names from closing the inline script.

@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod instance;
+mod log;
 mod menu;
 mod platform;
 mod render;
@@ -64,6 +65,7 @@ fn main() -> wry::Result<()> {
         return Ok(());
     }
 
+    log::init();
     let settings = Arc::new(Mutex::new(Settings::load()));
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -120,6 +122,7 @@ fn main() -> wry::Result<()> {
     let webview = match build_webview(&window, &mut web_context, &settings, &proxy) {
         Ok(webview) => webview,
         Err(err) => {
+            log::error(format!("WebView2 failed to start: {err}"));
             rfd::MessageDialog::new()
                 .set_title(APP_NAME)
                 .set_description(format!(
@@ -184,10 +187,13 @@ fn main() -> wry::Result<()> {
                         app.save_window_state();
                         *control_flow = ControlFlow::Exit;
                     }
-                    Err(err) => app.js(&format!(
-                        "mdrShell.updateFailed({})",
-                        json!(format!("не удалось запустить установщик: {err}"))
-                    )),
+                    Err(err) => {
+                        log::error(format!("update: cannot start {}: {err}", path.display()));
+                        app.js(&format!(
+                            "mdrShell.updateFailed({})",
+                            json!(format!("не удалось запустить установщик: {err}"))
+                        ))
+                    }
                 }
             }
             Event::UserEvent(UserEvent::Title(title)) => {
@@ -288,7 +294,10 @@ impl App {
         thread::spawn(move || {
             let result = match update::check() {
                 Ok(release) => json!({ "ok": true, "manual": manual, "release": release }),
-                Err(error) => json!({ "ok": false, "manual": manual, "error": error }),
+                Err(error) => {
+                    log::error(format!("update check: {error}"));
+                    json!({ "ok": false, "manual": manual, "error": error })
+                }
             };
             let _ = proxy.send_event(UserEvent::Js(format!("mdrShell.updateResult({result})")));
         });
@@ -315,7 +324,10 @@ impl App {
             };
             let event = match update::download(&url, &checksums, progress) {
                 Ok(path) => UserEvent::RunInstaller(path),
-                Err(error) => UserEvent::Js(format!("mdrShell.updateFailed({})", json!(error))),
+                Err(error) => {
+                    log::error(format!("update download: {error}"));
+                    UserEvent::Js(format!("mdrShell.updateFailed({})", json!(error)))
+                }
             };
             let _ = proxy.send_event(event);
         });
@@ -407,6 +419,12 @@ impl App {
                 self.settings_changed(true);
             }
             "check_updates" => self.check_updates(true),
+            "open_log" => {
+                if let Some(path) = log::path() {
+                    let _ = open::that_detached(path);
+                }
+            }
+            "report_issue" => open_external(&log::issue_url()),
             "update_auto" => {
                 let mut s = self.settings.lock().unwrap();
                 s.update_check = !s.update_check;
@@ -450,6 +468,7 @@ impl App {
             "installUpdate" => self.install_update(str_field("url"), str_field("checksums")),
             "menu" => return self.handle_command(&str_field("id")),
             "openExternal" => open_external(&str_field("url")),
+            "log" => log::error(format!("page: {}", str_field("message"))),
             "openPath" => {
                 let _ = open::that_detached(str_field("path"));
             }
@@ -499,6 +518,7 @@ impl App {
         }
         if let Some(target) = dialog.save_file() {
             if let Err(err) = fs::write(&target, server::export_page(title, article)) {
+                log::error(format!("export to {}: {err}", target.display()));
                 rfd::MessageDialog::new()
                     .set_title("Экспорт в HTML")
                     .set_description(format!("Не удалось сохранить файл: {err}"))

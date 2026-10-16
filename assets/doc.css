@@ -183,15 +183,15 @@ blockquote[class^="markdown-alert-"]::before {
   margin-bottom: 4px;
 }
 .markdown-alert-note { border-left-color: var(--note); }
-.markdown-alert-note::before { content: "Note"; color: var(--note); }
+.markdown-alert-note::before { content: "Примечание"; color: var(--note); }
 .markdown-alert-tip { border-left-color: var(--tip); }
-.markdown-alert-tip::before { content: "Tip"; color: var(--tip); }
+.markdown-alert-tip::before { content: "Совет"; color: var(--tip); }
 .markdown-alert-important { border-left-color: var(--important); }
-.markdown-alert-important::before { content: "Important"; color: var(--important); }
+.markdown-alert-important::before { content: "Важно"; color: var(--important); }
 .markdown-alert-warning { border-left-color: var(--warning); }
-.markdown-alert-warning::before { content: "Warning"; color: var(--warning); }
+.markdown-alert-warning::before { content: "Предупреждение"; color: var(--warning); }
 .markdown-alert-caution { border-left-color: var(--caution); }
-.markdown-alert-caution::before { content: "Caution"; color: var(--caution); }
+.markdown-alert-caution::before { content: "Осторожно"; color: var(--caution); }
 
 code, pre, kbd, samp {
   font-family: "Cascadia Code", Consolas, "SF Mono", "Liberation Mono", monospace;

@@ -247,16 +247,22 @@
     enhance(content);
     reportStats();
     shell?.docUpdated(window);
-    if (follow && fresh.length) requestAnimationFrame(() => followTo(fresh[0]));
+    if (follow && fresh.length) requestAnimationFrame(() => followTo(fresh));
   }
 
-  // Brings the latest edit into view, unless it is already there.
-  function followTo(el) {
-    const r = el.getBoundingClientRect();
-    if (r.top >= 0 && r.bottom <= innerHeight) return;
+  // Brings the latest edit into view as a whole, scrolling as little as possible.
+  function followTo(marks) {
+    const rects = marks.map((m) => (m.closest(BLOCK) || m).getBoundingClientRect());
+    const top = Math.min(...rects.map((r) => r.top));
+    const bottom = Math.max(...rects.map((r) => r.bottom));
+    const margin = 60;
+    let delta;
+    if (top >= 0 && bottom <= innerHeight) return;
+    if (bottom - top > innerHeight - 2 * margin || top < 0) delta = top - margin;
+    else delta = bottom - innerHeight + margin;
     // A hidden or covered window draws no frames, so a smooth scroll would stall there.
     const behavior = document.visibilityState === "visible" ? "smooth" : "instant";
-    scrollTo({ top: scrollY + r.top - innerHeight / 3, behavior });
+    scrollTo({ top: scrollY + delta, behavior });
   }
 
   // --- going through the changes ---------------------------------------------------

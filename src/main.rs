@@ -2,6 +2,7 @@
 
 mod clipboard;
 mod instance;
+mod links;
 mod log;
 mod menu;
 mod platform;
@@ -217,9 +218,17 @@ fn build_webview(
     proxy: &EventLoopProxy<UserEvent>,
 ) -> wry::Result<WebView> {
     let builder = WebViewBuilder::new_with_web_context(web_context)
-        .with_custom_protocol(PROTOCOL.into(), {
+        .with_asynchronous_custom_protocol(PROTOCOL.into(), {
             let settings = settings.clone();
-            move |_id, request| server::handle(&request, &settings)
+            move |_id, request, responder| {
+                // Scanning a folder for backlinks must not hold up the window.
+                if request.uri().path() == "/_api/backlinks" {
+                    let settings = settings.clone();
+                    thread::spawn(move || responder.respond(server::handle(&request, &settings)));
+                } else {
+                    responder.respond(server::handle(&request, &settings));
+                }
+            }
         })
         // Only the app shell lives in the top frame; anything else goes to the browser.
         .with_navigation_handler(|url| {

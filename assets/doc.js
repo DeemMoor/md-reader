@@ -145,7 +145,10 @@
     addCopyButtons(scope);
     renderMath(scope);
     renderMermaid(scope);
+    if (scope === content) window.mdrLinks?.refresh();
   }
+
+  window.mdrLinks?.init({ content, renderMath });
 
   // --- live diff ----------------------------------------------------------------
   // The tab remembers the version it first showed (the shell keeps it across

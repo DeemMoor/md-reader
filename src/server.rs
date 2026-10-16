@@ -63,6 +63,14 @@ pub fn handle(request: &Request<Vec<u8>>, settings: &Arc<Mutex<Settings>>) -> Re
         let dir = PathBuf::from(query.get("dir").unwrap_or_default());
         return json(&list_dir(&dir));
     }
+    if raw == "_api/exists" {
+        let paths: Vec<String> = serde_json::from_slice(request.body()).unwrap_or_default();
+        return json(&crate::links::exists(&paths));
+    }
+    if raw == "_api/backlinks" {
+        let path = PathBuf::from(query.get("path").unwrap_or_default());
+        return json(&crate::links::backlinks(&path));
+    }
     if raw == "_api/render" {
         // The live diff renders the version a tab started from, which is no longer on disk.
         let text = String::from_utf8_lossy(request.body());
@@ -79,6 +87,7 @@ pub fn handle(request: &Request<Vec<u8>>, settings: &Arc<Mutex<Settings>>) -> Re
     }
     if is_markdown(&path) {
         let source = query.get("view").as_deref() == Some("source");
+        let found = path.is_file();
         let content = match fs::read(&path) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
@@ -91,7 +100,12 @@ pub fn handle(request: &Request<Vec<u8>>, settings: &Arc<Mutex<Settings>>) -> Re
             ),
         };
         if query.has("body") {
-            return html(content);
+            // The error text still comes along, but the status lets link previews tell.
+            let mut response = html(content);
+            if !found {
+                *response.status_mut() = wry::http::StatusCode::NOT_FOUND;
+            }
+            return response;
         }
         let settings = settings.lock().unwrap().clone();
         return html(doc_page(&path, &content, &settings));
@@ -237,6 +251,7 @@ fn doc_page(path: &Path, content: &str, settings: &Settings) -> String {
 <body>
 <article id="content" class="markdown-body">{content}</article>
 <script nonce="{nonce}" src="/_app/diff.js"></script>
+<script nonce="{nonce}" src="/_app/links.js"></script>
 <script nonce="{nonce}" src="/_app/doc.js"></script>
 </body>
 </html>"#,

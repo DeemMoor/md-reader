@@ -325,3 +325,73 @@ span.mdr-ins, span.mdr-del { border-radius: 3px; -webkit-box-decoration-break: c
   .mdr-del, [data-mdr="del"] { display: none; }
   .mdr-ins { background-image: none; }
 }
+
+/* --- links: previews, broken links, backlinks --- */
+
+a.mdr-broken {
+  color: var(--caution);
+  text-decoration: underline wavy var(--caution);
+  text-underline-offset: 3px;
+}
+img.mdr-broken {
+  min-width: 48px;
+  min-height: 24px;
+  outline: 2px dashed var(--caution);
+  outline-offset: 2px;
+}
+
+.mdr-preview {
+  position: fixed;
+  z-index: 20;
+  max-height: min(360px, 70vh);
+  overflow: auto;
+  padding: 0 !important;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-size: 14px;
+}
+.mdr-preview[hidden] { display: none; }
+.mdr-preview-title {
+  position: sticky;
+  top: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--code-bg);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.mdr-preview-title.missing { color: var(--caution); border-bottom: 0; }
+.mdr-preview-body { padding: 4px 14px 12px; }
+.mdr-preview-body > *:first-child { margin-top: 8px; }
+.mdr-preview-body h1, .mdr-preview-body h2 { font-size: 1.25em; }
+.mdr-preview-note { color: var(--muted); font-style: italic; }
+.mdr-preview-body .footnote-definition { border-top: 0; padding-top: 0; margin-top: 8px; }
+
+.markdown-body:has(+ .mdr-links:not([hidden])) { padding-bottom: 16px; }
+
+.mdr-links { padding-top: 24px !important; }
+.mdr-links[hidden] { display: none; }
+.mdr-links h2 { font-size: 1.1em; color: var(--muted); }
+.mdr-links ul { padding-left: 0; list-style: none; }
+.mdr-links li { margin: 0 0 12px; }
+.mdr-snippet { color: var(--muted); font-size: 0.92em; }
+.mdr-snippet mark { background: none; color: var(--fg); font-weight: 600; }
+.mdr-problem {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--caution);
+  font: inherit;
+  text-decoration: underline wavy var(--caution);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+@media print {
+  .mdr-preview, .mdr-links { display: none !important; }
+  a.mdr-broken { color: inherit; text-decoration: none; }
+  img.mdr-broken { outline: none; }
+}

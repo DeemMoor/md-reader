@@ -41,6 +41,8 @@ enum UserEvent {
     Open(Vec<PathBuf>),
     Refresh(PathBuf),
     Title(String),
+    /// The shell page has loaded and can be shown.
+    Loaded,
     /// Script for the page, from a background thread.
     Js(String),
     /// A downloaded update installer: start it and quit.
@@ -92,7 +94,9 @@ fn main() -> wry::Result<()> {
         .with_inner_size(LogicalSize::new(1100.0, 820.0))
         .with_min_inner_size(LogicalSize::new(480.0, 320.0))
         .with_window_icon(window_icon())
-        .with_theme(window_theme(&initial.theme));
+        .with_theme(window_theme(&initial.theme))
+        // Shown once its background matches the theme, which for "auto" needs the window.
+        .with_visible(false);
     if let Some(ws) = initial.window {
         let on_screen = event_loop.available_monitors().any(|m| {
             let (p, s) = (m.position(), m.size());
@@ -104,6 +108,8 @@ fn main() -> wry::Result<()> {
         }
     }
     let window = builder.build(&event_loop).expect("failed to create window");
+    window.set_background_color(Some(background(&initial.theme, &window)));
+    window.set_visible(true);
 
     let app_menu = AppMenu::new(&initial);
     #[cfg(windows)]
@@ -182,6 +188,10 @@ fn main() -> wry::Result<()> {
             Event::UserEvent(UserEvent::Refresh(path)) => {
                 app.js(&format!("mdrShell.fileChanged({})", json!(path)));
             }
+            Event::UserEvent(UserEvent::Loaded) => {
+                let _ = app.webview.set_visible(true);
+                let _ = app.webview.focus();
+            }
             Event::UserEvent(UserEvent::Js(script)) => app.js(&script),
             Event::UserEvent(UserEvent::RunInstaller(path)) => {
                 match update::run_installer(&path) {
@@ -216,7 +226,20 @@ fn build_webview(
     settings: &Arc<Mutex<Settings>>,
     proxy: &EventLoopProxy<UserEvent>,
 ) -> wry::Result<WebView> {
+    let theme = settings.lock().unwrap().theme.clone();
     let builder = WebViewBuilder::new_with_web_context(web_context)
+        // Shown until the page paints, so startup doesn't flash white in a dark theme.
+        .with_background_color(background(&theme, window))
+        // WebView2 shows a grey frame before the first paint; the themed window covers it.
+        .with_visible(false)
+        .with_on_page_load_handler({
+            let proxy = proxy.clone();
+            move |event, _| {
+                if matches!(event, wry::PageLoadEvent::Finished) {
+                    let _ = proxy.send_event(UserEvent::Loaded);
+                }
+            }
+        })
         .with_asynchronous_custom_protocol(PROTOCOL.into(), {
             let settings = settings.clone();
             move |_id, request, responder| {
@@ -385,6 +408,9 @@ impl App {
         s.save();
         self.menu.sync(&s);
         self.window.set_theme(window_theme(&s.theme));
+        let bg = background(&s.theme, &self.window);
+        self.window.set_background_color(Some(bg));
+        let _ = self.webview.set_background_color(bg);
         #[cfg(windows)]
         unsafe {
             use tao::platform::windows::WindowExtWindows;
@@ -650,6 +676,17 @@ fn window_theme(theme: &str) -> Option<Theme> {
         "dark" => Some(Theme::Dark),
         "light" | "sepia" => Some(Theme::Light),
         _ => None,
+    }
+}
+
+/// The page background of a theme (`--bg` in shell.css); "auto" follows the system.
+fn background(theme: &str, window: &Window) -> wry::RGBA {
+    match theme {
+        "sepia" => (0xf6, 0xee, 0xdb, 0xff),
+        "dark" => (0x0d, 0x11, 0x17, 0xff),
+        "light" => (0xff, 0xff, 0xff, 0xff),
+        _ if window.theme() == Theme::Dark => (0x0d, 0x11, 0x17, 0xff),
+        _ => (0xff, 0xff, 0xff, 0xff),
     }
 }
 

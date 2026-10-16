@@ -512,7 +512,6 @@
   function showAbout() {
     const a = INIT.about;
     const link = (text, onclick, title) => el("a", { href: "#", title: title || text, onclick: (e) => (e.preventDefault(), onclick()) }, text);
-    const pathLink = (p) => (p ? link(p, () => post("reveal", { path: p }), "Показать в папке") : "—");
     const row = (label, value) => [el("dt", {}, label), el("dd", {}, value)];
     const copyBtn = el("button", { class: "secondary", type: "button" }, "Скопировать сведения");
     copyBtn.addEventListener("click", () => {
@@ -546,9 +545,6 @@
           ...row("Сайт", link("github.com/DeemMoor/md-reader", () => post("openExternal", { url: "https://github.com/DeemMoor/md-reader" }))),
           ...row("Сборка", `${a.buildDate}${a.commit ? " · " + a.commit : ""}`),
           ...row("Движок", a.engine),
-          ...row("Программа", pathLink(a.exe)),
-          ...row("Настройки", pathLink(a.settingsFile)),
-          ...row("Данные", pathLink(a.dataDir)),
         ),
         el("p", { class: "about-credits" }, "© 2026 Deem Moor. Используются pulldown-cmark, syntect, wry, tao, muda, KaTeX и Mermaid."),
         el("div", { class: "modal-actions" }, copyBtn, closeBtn),

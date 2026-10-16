@@ -1,9 +1,9 @@
 //! Update check against the latest GitHub release and, on Windows, a one-click
-//! install: download the NSIS installer, start it and quit.
+//! install: download the NSIS installer, run it without the wizard and quit.
 
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -147,6 +147,17 @@ pub fn download(url: &str, checksums: &str, mut progress: impl FnMut(u32)) -> Re
         return Err("контрольная сумма не совпала, файл повреждён или подменён".into());
     }
     Ok(path)
+}
+
+/// Starts the installer without its wizard: `/P` shows only a progress window, `/R`
+/// starts the app again when done, `/NS` keeps a removed desktop shortcut removed.
+/// The installer closes the running app itself.
+pub fn run_installer(path: &Path) -> std::io::Result<()> {
+    match std::process::Command::new(path).args(["/P", "/R", "/NS"]).spawn() {
+        Ok(_) => Ok(()),
+        // Through the shell, so an installer that needs elevation can ask for it.
+        Err(_) => open::that_detached(path),
+    }
 }
 
 #[cfg(test)]

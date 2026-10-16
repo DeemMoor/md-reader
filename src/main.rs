@@ -184,8 +184,7 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::Js(script)) => app.js(&script),
             Event::UserEvent(UserEvent::RunInstaller(path)) => {
-                // Through the shell, so the installer can ask for elevation if it needs it.
-                match open::that_detached(&path) {
+                match update::run_installer(&path) {
                     Ok(()) => {
                         app.save_window_state();
                         *control_flow = ControlFlow::Exit;

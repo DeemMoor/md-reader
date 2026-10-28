@@ -1,5 +1,6 @@
 //! "New from clipboard": the clipboard becomes a Markdown document in a scratch file
-//! that opens like any other tab. HTML copied from a web page is converted to Markdown.
+//! that opens like any other tab. HTML copied from a web page is converted to Markdown,
+//! unless the clipboard already holds the Markdown it was rendered from.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,11 +26,43 @@ pub fn read() -> Result<String, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let text = clipboard.get_text().unwrap_or_default();
     let html = clipboard.get().html().unwrap_or_default();
-    let markdown = if is_rich(&html) { to_markdown(&html).unwrap_or(text) } else { text };
+    let markdown = choose(text, &html);
     if markdown.trim().is_empty() {
         return Err("в буфере обмена нет текста".into());
     }
     Ok(markdown)
+}
+
+/// Copy buttons of AI chats put the Markdown source next to its HTML, and that HTML can
+/// be lossy (code in a list item loses its line breaks). Plain text whose own rendering
+/// has the clipboard HTML's structure is that source; otherwise the HTML is converted.
+fn choose(text: String, html: &str) -> String {
+    if !is_rich(html) {
+        return text;
+    }
+    if is_source_of(&text, html) {
+        return text;
+    }
+    to_markdown(html).unwrap_or(text)
+}
+
+fn is_source_of(text: &str, html: &str) -> bool {
+    let mut rendered = String::new();
+    pulldown_cmark::html::push_html(&mut rendered, pulldown_cmark::Parser::new_ext(text, pulldown_cmark::Options::all()));
+    let (a, b) = (structure(&rendered), structure(html));
+    let total: usize = b.iter().sum();
+    let same: usize = a.iter().zip(&b).map(|(x, y)| x.min(y)).sum();
+    let most: usize = a.iter().zip(&b).map(|(x, y)| x.max(y)).sum();
+    total > 0 && same * 10 >= most * 9
+}
+
+/// How many of each formatting element a piece of HTML has.
+fn structure(html: &str) -> Vec<usize> {
+    let lower = html.to_ascii_lowercase();
+    ["<strong", "<em", "<code", "<pre", "<li", "<h1", "<h2", "<h3", "<h4", "<table", "<blockquote", "<a "]
+        .iter()
+        .map(|tag| lower.matches(tag).count())
+        .collect()
 }
 
 /// Writes `markdown` to a new scratch file.
@@ -116,6 +149,20 @@ mod tests {
         let html = "<ul><li><p>Types:</p><pre><code class=\"language-typescript\">interface User {\n    id: number;\n}\n</code></pre></li></ul>";
         let md = to_markdown(html).unwrap();
         assert!(md.contains("```typescript\n  interface User {\n      id: number;\n  }\n  ```"), "{md}");
+    }
+
+    #[test]
+    fn markdown_source_wins_over_lossy_html() {
+        let text = "**Types:**\n- **Interfaces**:\n  ```ts\n  interface User {\n      id: number;\n  }\n  ```\n- `status`\n";
+        let html = "<p><strong>Types:</strong></p><ul><li><strong>Interfaces</strong>:<pre><code class=\"language-ts\">interface User {    id: number;}\n</code></pre></li><li><code>status</code></li></ul>";
+        assert_eq!(choose(text.into(), html), text);
+    }
+
+    #[test]
+    fn page_selection_is_converted_from_html() {
+        let text = "Title\nSome bold text.\none\ntwo\n";
+        let html = "<h2>Title</h2><p>Some <strong>bold</strong> text.</p><ul><li>one</li><li>two</li></ul>";
+        assert_eq!(choose(text.into(), html), "## Title\n\nSome **bold** text.\n\n- one\n- two\n");
     }
 
     #[test]

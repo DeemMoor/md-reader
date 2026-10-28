@@ -528,6 +528,7 @@ iframe.doc.active { display: block; }
   font: 12px "Cascadia Code", Consolas, monospace;
 }
 .release-notes a { color: var(--accent); }
+.release-notes img { max-width: 100%; height: auto; }
 
 .update-status { margin: 0 0 12px; color: var(--diff-del); }
 .update-status:empty { display: none; }

@@ -6,6 +6,11 @@
 - Подсветка кода на TypeScript, TSX, TOML, Dockerfile и ещё десятках языков; большие блоки кода подсвечиваются быстрее.
 - «Создать из буфера» берёт исходный Markdown ответа ИИ, если чат положил его в буфер вместе с оформлением: код внутри списков больше не склеивается в одну строку.
 
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/DeemMoor/md-reader/main/docs/images/changelog/0.3.4-highlight-dark.gif">
+<img src="https://raw.githubusercontent.com/DeemMoor/md-reader/main/docs/images/changelog/0.3.4-highlight-light.gif" width="500" alt="Ответ ИИ с кодом на TypeScript: было — без подсветки и с кодом в одну строку, стало — с подсветкой и по строкам">
+</picture>
+
 ## 0.3.3 — 2026-10-17
 
 - Обновление ставится без мастера установки: программа закрывается, обновляется и открывается снова с теми же вкладками.

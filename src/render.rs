@@ -176,6 +176,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn release_notes_keep_pictures() {
+        let html = markdown_to_html("- item\n\n<picture>\n<source media=\"(prefers-color-scheme: dark)\" srcset=\"d.gif\">\n<img src=\"l.gif\" alt=\"x\">\n</picture>\n");
+        assert!(html.contains("<picture>\n<source media=\"(prefers-color-scheme: dark)\" srcset=\"d.gif\">"), "{html}");
+    }
+
+    #[test]
     fn typescript_is_highlighted() {
         for lang in ["typescript", "ts", "tsx", "toml", "rust", "markdown"] {
             let html = highlight(lang, "let x: number = 1;\n");

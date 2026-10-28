@@ -9,7 +9,7 @@ use syntect::util::LinesWithEndings;
 
 const CLASS_STYLE: ClassStyle = ClassStyle::SpacedPrefixed { prefix: "hl-" };
 
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
 
 /// Highlighting CSS: light colors by default, dark ones for the dark theme
 /// (explicit, or "auto" while the system is dark). Relies on CSS nesting.
@@ -174,6 +174,14 @@ pub fn escape_html(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typescript_is_highlighted() {
+        for lang in ["typescript", "ts", "tsx", "toml", "rust", "markdown"] {
+            let html = highlight(lang, "let x: number = 1;\n");
+            assert!(html.contains("<span class=\"hl-"), "{lang}: {html}");
+        }
+    }
 
     #[test]
     fn headings_get_unique_ids() {

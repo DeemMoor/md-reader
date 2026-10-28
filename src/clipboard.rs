@@ -112,6 +112,13 @@ mod tests {
     }
 
     #[test]
+    fn code_in_a_list_keeps_its_lines() {
+        let html = "<ul><li><p>Types:</p><pre><code class=\"language-typescript\">interface User {\n    id: number;\n}\n</code></pre></li></ul>";
+        let md = to_markdown(html).unwrap();
+        assert!(md.contains("```typescript\n  interface User {\n      id: number;\n  }\n  ```"), "{md}");
+    }
+
+    #[test]
     fn editor_html_is_not_rich() {
         assert!(!is_rich("<div style=\"color: #d4d4d4\"><span># Title</span></div>"));
         assert!(is_rich("<meta charset='utf-8'><P class=x>text</P>"));
